@@ -16,7 +16,7 @@ window itself is resized.
 ### TPM (recommended)
 Add to `~/.tmux.conf`:
 ```tmux
-set -g @plugin 'YOURNAME/tmux-pane-minimize'
+set -g @plugin 'rootschafer/tmux-pane-minimize'
 run '~/.tmux/plugins/tpm/tpm'
 ```
 Then press `prefix + I` to fetch.
@@ -37,7 +37,7 @@ set -g @minimize-height '3'         # minimized height in rows
 set -g @minimize-width  '15'        # minimized width in columns (narrow column)
 set -g @minimize-marker 'off'       # 'on' to show a marker on minimized panes
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
-set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ▼ #[default]'
+set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ⌄ #[default]'
 ```
 
 ### About the marker (opt-in)
@@ -47,7 +47,7 @@ already customize those, leave the marker `off` and add your own conditional on
 `#{@minimize_active}` instead, e.g.:
 ```tmux
 set -g pane-border-status top
-set -g pane-border-format '#{pane_index} #{?@minimize_active,#[fg=yellow] ▼ ,}'
+set -g pane-border-format '#{pane_index} #{?@minimize_active,#[fg=yellow] ⌄ ,}'
 ```
 
 ## How it works

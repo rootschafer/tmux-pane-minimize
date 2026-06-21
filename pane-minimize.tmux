@@ -16,7 +16,7 @@ KEY="$(opt @minimize-key 'C-t')"
 HEIGHT="$(opt @minimize-height '3')"
 MARKER="$(opt @minimize-marker 'off')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
-MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ▼ #[default]')"
+MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ⌄ #[default]')"
 GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => forget
 
 # Toggle key (prefix table).
