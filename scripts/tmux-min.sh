@@ -247,9 +247,10 @@ handle_click() {
     [ "$mx" -ge "$lo" ] && [ "$mx" -le "$right" ] || continue
     target="$pid"; tact="$act"; break
   done <<< "$panes"
-  [ -z "$target" ] && return
+  [ -z "$target" ] && return 0
   if [ "$tact" = 1 ]; then toggle_pane "$target"
   elif [ "$button" = "on" ]; then toggle_pane "$target"; fi
+  return 0
 }
 
 case "${1:-}" in
