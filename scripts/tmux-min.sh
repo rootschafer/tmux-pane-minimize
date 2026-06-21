@@ -200,7 +200,7 @@ apply() {
   BORDER_POS=$(tmux show-options -gqv pane-border-status 2>/dev/null || true)
   case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
   layout=$(tmux display-message -p -t "$win" '#{window_layout}')
-  minset=" $(tmux list-panes -t "$win" -F '#{?@minimize_active,#{pane_id},}' | tr -d '%' | tr '\n' ' ')"
+  minset=" $(tmux list-panes -t "$win" -F '#{?@minimize_active,#{?@minimize_peek,,#{pane_id}},}' | tr -d '%' | tr '\n' ' ')"
   savedw=" $(tmux list-panes -t "$win" -F '#{?@minimize_saved_w,#{pane_id}:#{@minimize_saved_w},}' | tr -d '%' | tr '\n' ' ')"
   new=$(transform "$layout" "$minset" "$savedw" "$wp" "$wv")
   tmux select-layout -t "$win" "$new"
@@ -213,6 +213,7 @@ toggle_pane() {
   tmux set-option -g @minimize_guard 1
   if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_active,1,0}')" = 1 ]; then
     tmux set-option -t "$pane" -p @minimize_active 0
+    tmux set-option -t "$pane" -pu @minimize_peek
     saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
     apply "$win" "$num" "$saved"
   else
@@ -224,8 +225,32 @@ toggle_pane() {
   tmux set-option -gu @minimize_guard
 }
 
+peekin() {
+  local pane="$1" win num saved
+  [ "$(tmux show-option -gqv @minimize_guard 2>/dev/null || true)" = "1" ] && return 0
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  num=$(tmux display-message -p -t "$pane" '#{pane_id}' | tr -d '%')
+  tmux set-option -g @minimize_guard 1
+  tmux set-option -t "$pane" -p @minimize_peek 1
+  saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
+  apply "$win" "$num" "$saved"
+  tmux set-option -gu @minimize_guard
+}
+
+peekout() {
+  local pane="$1" win
+  [ "$(tmux show-option -gqv @minimize_guard 2>/dev/null || true)" = "1" ] && return 0
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  tmux set-option -g @minimize_guard 1
+  tmux set-option -t "$pane" -pu @minimize_peek
+  apply "$win"
+  tmux set-option -gu @minimize_guard
+}
+
 case "${1:-}" in
   toggle)    toggle_pane "$2" ;;
+  peekin)    peekin "$2" ;;
+  peekout)   peekout "$2" ;;
   repin)
     tmux set-option -g @minimize_guard 1; apply "$2"; tmux set-option -gu @minimize_guard ;;
   selftest)
@@ -234,5 +259,7 @@ case "${1:-}" in
     echo "height-only (96,97 min, 98 not -> 96/97=3, 95 untouched):"
     echo "  $(transform "$L" ' 96 97 ')"
     echo "full stack min (96,98,97 all min -> right column narrows to MIN_W=$MIN_W, 95 widens):"
-    echo "  $(transform "$L" ' 96 98 97 ')" ;;
+    echo "  $(transform "$L" ' 96 98 97 ')"
+    echo "peek: 96 min, 98 peeking (excluded from MINSET) -> 98 expands among flex panes:"
+    echo "  $(transform "$L" ' 96 ')" ;;
 esac
