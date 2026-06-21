@@ -206,23 +206,55 @@ apply() {
   tmux select-layout -t "$win" "$new"
 }
 
+toggle_pane() {
+  local pane="$1" win num saved
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  num=$(tmux display-message -p -t "$pane" '#{pane_id}' | tr -d '%')
+  tmux set-option -g @minimize_guard 1
+  if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_active,1,0}')" = 1 ]; then
+    tmux set-option -t "$pane" -p @minimize_active 0
+    saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
+    apply "$win" "$num" "$saved"
+  else
+    tmux set-option -t "$pane" -p @minimize_saved   "$(tmux display-message -p -t "$pane" '#{pane_height}')"
+    tmux set-option -t "$pane" -p @minimize_saved_w "$(tmux display-message -p -t "$pane" '#{pane_width}')"
+    tmux set-option -t "$pane" -p @minimize_active 1
+    apply "$win"
+  fi
+  tmux set-option -gu @minimize_guard
+}
+
+# handle_click <window_id> <mouse_x> <mouse_y>
+# Toggle the pane whose marker hit-region — the right HIT_W columns of its
+# pane-border-status line — contains the click. A minimized pane is always
+# restored; a normal pane is minimized only when @minimize-button is "on" (so a
+# stray border click can't collapse a pane when the button feature is disabled).
+handle_click() {
+  local win="$1" mx="$2" my="$3" bpos button HIT_W panes pid pl pt pw ph act row right lo target tact
+  case "$mx" in ''|*[!0-9]*) return;; esac
+  case "$my" in ''|*[!0-9]*) return;; esac
+  bpos=$(tmux show-options -gqv pane-border-status 2>/dev/null || true)
+  case "$bpos" in top|bottom) ;; *) return ;; esac   # no border line => no marker to click
+  button=$(tmux show-options -gqv @minimize-button 2>/dev/null || true)
+  HIT_W=3
+  panes=$(tmux list-panes -t "$win" -F '#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{?@minimize_active,1,0}')
+  target=""; tact=0
+  while read -r pid pl pt pw ph act; do
+    [ -z "${pid:-}" ] && continue
+    if [ "$bpos" = top ]; then row=$(( pt - 1 )); else row=$(( pt + ph )); fi
+    [ "$my" -eq "$row" ] || continue
+    right=$(( pl + pw - 1 )); lo=$(( right - HIT_W + 1 ))
+    [ "$mx" -ge "$lo" ] && [ "$mx" -le "$right" ] || continue
+    target="$pid"; tact="$act"; break
+  done <<< "$panes"
+  [ -z "$target" ] && return
+  if [ "$tact" = 1 ]; then toggle_pane "$target"
+  elif [ "$button" = "on" ]; then toggle_pane "$target"; fi
+}
+
 case "${1:-}" in
-  toggle)
-    pane="$2"; win=$(tmux display-message -p -t "$pane" '#{window_id}')
-    num=$(tmux display-message -p -t "$pane" '#{pane_id}' | tr -d '%')
-    tmux set-option -g @minimize_guard 1
-    if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_active,1,0}')" = 1 ]; then
-      tmux set-option -t "$pane" -p @minimize_active 0
-      saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
-      apply "$win" "$num" "$saved"
-    else
-      tmux set-option -t "$pane" -p @minimize_saved   "$(tmux display-message -p -t "$pane" '#{pane_height}')"
-      tmux set-option -t "$pane" -p @minimize_saved_w "$(tmux display-message -p -t "$pane" '#{pane_width}')"
-      tmux set-option -t "$pane" -p @minimize_active 1
-      apply "$win"
-    fi
-    tmux set-option -gu @minimize_guard
-    ;;
+  toggle) toggle_pane "$2" ;;
+  click)  handle_click "$2" "${3:-}" "${4:-}" ;;
   repin)
     tmux set-option -g @minimize_guard 1; apply "$2"; tmux set-option -gu @minimize_guard ;;
   selftest)

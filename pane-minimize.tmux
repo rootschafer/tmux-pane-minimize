@@ -15,12 +15,20 @@ opt() { # @name  default
 KEY="$(opt @minimize-key 'C-t')"
 HEIGHT="$(opt @minimize-height '3')"
 MARKER="$(opt @minimize-marker 'off')"
+BUTTON="$(opt @minimize-button 'off')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
-MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  ⌄ #[default]')"
+MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]')"
+BUTTON_FMT="$(opt @minimize-button-format '#[align=right]#[fg=colour244]  󰘕 #[default]')"
 GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => forget
 
 # Toggle key (prefix table).
 tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
+
+# Click the marker (right edge of a pane's border-status line) to toggle: a
+# minimized pane restores; a normal pane minimizes when @minimize-button is on.
+# There is no default MouseDown1Border binding, and drag-to-resize is a separate
+# event (MouseDrag1Border), so this is non-invasive.
+tmux bind-key -T root MouseDown1Border run-shell -b "$SCRIPT click #{window_id} #{mouse_x} #{mouse_y}"
 
 # Forget minimized state when the user resizes a pane themselves.
 #  - keyboard / resize-pane command fires after-resize-pane
@@ -40,8 +48,14 @@ tmux bind-key -T root MouseDragEnd1Border run-shell -b \
   "tmux list-panes -t '#{window_id}' -F '##{pane_id} ##{?@minimize_active,1,0} ##{pane_height}' | while read id a h; do { [ \"\$a\" = 1 ] && [ \"\$h\" -gt $GROW ]; } && tmux set-option -t \"\$id\" -p @minimize_active 0; done"
 
 # Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.
+# Minimized panes show MARKER_FMT (the restore icon); when @minimize-button is on,
+# normal panes show BUTTON_FMT (the minimize icon) in the same spot.
 if [ "$MARKER" = "on" ]; then
   case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac  # pane-border-status only takes top|bottom
   tmux set-option -g pane-border-status "$MARKER_POS"
-  tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},}"
+  if [ "$BUTTON" = "on" ]; then
+    tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},${BUTTON_FMT}}"
+  else
+    tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},}"
+  fi
 fi
