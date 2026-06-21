@@ -24,6 +24,7 @@ LS=""; POS=0; NN=0
 declare -a NT NW NH NX NY NP NC WM
 MINSET=" "          # " 1 4 7 " space-delimited minimized pane numbers
 WPANE=""; WVAL=0    # restore weight override
+BORDER_POS=off      # pane-border-status: top|bottom|off (for the edge-row fix)
 RINT=0; RET=0
 
 _read_int() { RINT=""; local ch
@@ -66,32 +67,48 @@ wants_min() {
   WM[$id]=$r; RET=$r
 }
 
+# A minimized cell touching the window's border-status edge renders 1 row short
+# (the status line overlays that row), so give it +1 there. ot/ob = does this
+# node touch the window top/bottom edge.
+_edge_bonus() {  # $1 wants_min(0/1)  $2 is_first  $3 is_last  $4 ot  $5 ob -> RET
+  RET=0; [ "$1" = 1 ] || return
+  [ "$4" = 1 ] && [ "$2" = 1 ] && [ "$BORDER_POS" = top ] && RET=$((RET+1))
+  [ "$5" = 1 ] && [ "$3" = 1 ] && [ "$BORDER_POS" = bottom ] && RET=$((RET+1))
+}
+
 recompute() {
-  local id=$1 H=$2 Y=$3
+  local id=$1 H=$2 Y=$3 ot=$4 ob=$5
   NH[$id]=$H; NY[$id]=$Y
   case "${NT[$id]}" in
     leaf) ;;
-    h) local c; for c in ${NC[$id]}; do recompute "$c" "$H" "$Y"; done ;;
-    v) local kids="${NC[$id]}" n avail fixed wsum c w hc rest assigned last yy
+    h) local c; for c in ${NC[$id]}; do recompute "$c" "$H" "$Y" "$ot" "$ob"; done ;;  # row spans full height -> same edges
+    v) local kids="${NC[$id]}" n i avail fixed wsum c w hc rest assigned last yy wm bonus otc obc
        set -- $kids; n=$#
        avail=$(( H - (n - 1) ))
-       fixed=0; wsum=0; last=""
+       fixed=0; wsum=0; last=""; i=0
        for c in $kids; do
-         wants_min "$c"
-         if [ "$RET" = 1 ]; then fixed=$(( fixed + MIN_H ))
+         wants_min "$c"; wm=$RET
+         if [ "$wm" = 1 ]; then
+           _edge_bonus 1 "$([ $i -eq 0 ] && echo 1 || echo 0)" "$([ $i -eq $((n-1)) ] && echo 1 || echo 0)" "$ot" "$ob"
+           fixed=$(( fixed + MIN_H + RET ))
          else w=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && w=$WVAL
               wsum=$(( wsum + w )); last=$c; fi
+         i=$((i+1))
        done
        rest=$(( avail - fixed )); [ "$rest" -lt 0 ] && rest=0
        [ "$wsum" -le 0 ] && wsum=1
-       assigned=0; yy=$Y
+       assigned=0; yy=$Y; i=0
        for c in $kids; do
-         wants_min "$c"
-         if [ "$RET" = 1 ]; then hc=$MIN_H
+         otc=0; obc=0; [ "$i" -eq 0 ] && otc=$ot; [ "$i" -eq $((n-1)) ] && obc=$ob
+         wants_min "$c"; wm=$RET
+         if [ "$wm" = 1 ]; then
+           _edge_bonus 1 "$([ $i -eq 0 ] && echo 1 || echo 0)" "$([ $i -eq $((n-1)) ] && echo 1 || echo 0)" "$ot" "$ob"
+           hc=$(( MIN_H + RET ))
          elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1
          else w=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && w=$WVAL
               hc=$(( w * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fi
-         recompute "$c" "$hc" "$yy"; yy=$(( yy + hc + 1 ))
+         recompute "$c" "$hc" "$yy" "$otc" "$obc"; yy=$(( yy + hc + 1 ))
+         i=$((i+1))
        done ;;
   esac
 }
@@ -117,13 +134,15 @@ transform() {
   local layout="$1"; MINSET="$2"; WPANE="${3:-}"; WVAL="${4:-0}"
   LS="${layout#*,}"; POS=0; NN=0; NT=(); NW=(); NH=(); NX=(); NY=(); NP=(); NC=(); WM=()
   parse_cell
-  recompute 0 "${NH[0]}" "${NY[0]}"
+  recompute 0 "${NH[0]}" "${NY[0]}" 1 1     # root touches both top & bottom edges
   serialize 0; local geom=$RET
   echo "$(checksum "$geom"),$geom"
 }
 
 apply() {
   local win="$1" wp="${2:-}" wv="${3:-0}" layout minset new
+  BORDER_POS=$(tmux show-options -gqv pane-border-status 2>/dev/null || true)
+  case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
   layout=$(tmux display-message -p -t "$win" '#{window_layout}')
   minset=" $(tmux list-panes -t "$win" -F '#{?@minimize_active,#{pane_id},}' | tr -d '%' | tr '\n' ' ')"
   new=$(transform "$layout" "$minset" "$wp" "$wv")
