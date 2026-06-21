@@ -15,20 +15,22 @@ opt() { # @name  default
 KEY="$(opt @minimize-key 'C-t')"
 HEIGHT="$(opt @minimize-height '3')"
 MARKER="$(opt @minimize-marker 'off')"
-BUTTON="$(opt @minimize-button 'off')"
+MENU="$(opt @minimize-menu 'off')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
 MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]')"
-BUTTON_FMT="$(opt @minimize-button-format '#[align=right]#[fg=colour244]  󰘕 #[default]')"
 GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => forget
 
 # Toggle key (prefix table).
 tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
 
-# Click the marker (right edge of a pane's border-status line) to toggle: a
-# minimized pane restores; a normal pane minimizes when @minimize-button is on.
-# There is no default MouseDown1Border binding, and drag-to-resize is a separate
-# event (MouseDrag1Border), so this is non-invasive.
-tmux bind-key -T root MouseDown1Border run-shell -b "$SCRIPT click #{window_id} #{mouse_x} #{mouse_y}"
+# Right-click menu (opt-in). This is the reliable click path: a pane mouse event
+# resolves #{pane_id} to the exact moused pane (border clicks do not, and a content
+# click would steal a cell from child TUIs). The menu's first item toggles minimize;
+# the rest mirror handy defaults so right-click stays useful. The whole display-menu
+# is one quoted string so tmux parses the item triples as the bound command.
+if [ "$MENU" = "on" ]; then
+  tmux bind-key -T root MouseDown3Pane "display-menu -t = -x M -y M -T \"#[align=centre]#{pane_index}\" \"#{?@minimize_active,Un-Minimize,Minimize}\" m \"run-shell '$SCRIPT toggle #{pane_id}'\" \"\" \"#{?window_zoomed_flag,Unzoom,Zoom}\" z \"resize-pane -Z\" \"Swap Up\" u \"swap-pane -U\" \"Swap Down\" d \"swap-pane -D\" \"\" \"Kill\" X \"kill-pane\""
+fi
 
 # Forget minimized state when the user resizes a pane themselves.
 #  - keyboard / resize-pane command fires after-resize-pane
@@ -50,14 +52,9 @@ tmux bind-key -T root MouseDragEnd1Border run-shell -b \
   "tmux list-panes -t '#{window_id}' -F '##{pane_id} ##{?@minimize_active,1,0} ##{pane_height}' | while read id a h; do { [ \"\$a\" = 1 ] && [ \"\$h\" -gt $GROW ]; } && tmux set-option -t \"\$id\" -p @minimize_active 0; done; : ok"
 
 # Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.
-# Minimized panes show MARKER_FMT (the restore icon); when @minimize-button is on,
-# normal panes show BUTTON_FMT (the minimize icon) in the same spot.
+# Minimized panes show MARKER_FMT (a state indicator); normal panes show nothing.
 if [ "$MARKER" = "on" ]; then
   case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac  # pane-border-status only takes top|bottom
   tmux set-option -g pane-border-status "$MARKER_POS"
-  if [ "$BUTTON" = "on" ]; then
-    tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},${BUTTON_FMT}}"
-  else
-    tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},}"
-  fi
+  tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},}"
 fi

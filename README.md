@@ -50,15 +50,14 @@ rows, default 3) and its previous size. Re-bind with `@minimize-key`.
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
 set -g @minimize-height '3'         # minimized height in rows
 set -g @minimize-width  '15'        # minimized width in columns (narrow column)
-set -g @minimize-marker 'off'       # 'on' to show a marker on minimized panes
-set -g @minimize-button 'off'       # 'on' to also show a clickable minimize button
-                                    #      on normal panes (needs the marker on)
+set -g @minimize-marker 'off'       # 'on' to show a state marker on minimized panes
+set -g @minimize-menu 'off'         # 'on' to add Minimize/Un-Minimize to the
+                                    #      right-click (MouseDown3Pane) pane menu
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
-set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]'  # restore icon (minimized)
-set -g @minimize-button-format '#[align=right]#[fg=colour244]  󰘕 #[default]'         # minimize icon (normal)
+set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]'  # marker (minimized)
 ```
-The default icons (`󰘖` expand / `󰘕` collapse) are Nerd Font glyphs; override the
-formats with any glyph your font has (see the fallback note below).
+The default marker icon (`󰘖`) is a Nerd Font glyph; override the format with any
+glyph your font has (see the fallback note below).
 
 ### About the marker (opt-in)
 The marker needs a pane-border status line, so enabling `@minimize-marker on`
@@ -73,26 +72,23 @@ set -g pane-border-format '#{pane_index} #{?@minimize_active,#[fg=yellow]  ⌄ ,
 The leading spaces matter: with `#[align=right]` the border line is drawn right up
 to the marker, so a space or two keeps it from butting against the line.
 
-**Glyph not rendering?** The defaults (`󰘖`/`󰘕`) need a Nerd Font. If you see a box,
-set `@minimize-marker-format` / `@minimize-button-format` to glyphs your font has —
-e.g. universal `+`/`-`, `▢`/`_`, or `⌄`/`⌃`. The colours (`colour214` orange,
-`colour244` grey) are configurable in the same formats; pick high-contrast colours
-if they're hard to read against your theme.
+**Glyph not rendering?** The default (`󰘖`) needs a Nerd Font. If you see a box, set
+`@minimize-marker-format` to a glyph your font has — e.g. universal `+`, `▢`, or `⌄`.
+The colour (`colour214` orange) is configurable in the same format; pick a
+high-contrast colour if it's hard to read against your theme.
 
-## Click to toggle
-Click the marker (the right edge of a pane's border line) to toggle that pane —
-a minimized pane **restores**, and with `@minimize-button on` a normal pane
-**minimizes**. This needs `set -g mouse on`. It binds `MouseDown1Border`, which has
-no default binding and is separate from drag-to-resize (`MouseDrag1Border`), so it
-doesn't interfere with resizing or pane selection.
+## Mouse: the right-click menu
+`@minimize-menu on` adds a **Minimize / Un-Minimize** item (toggling per the pane's
+state) to the top of a right-click (`MouseDown3Pane`) pane menu, alongside a few
+handy defaults (Zoom, Swap, Kill). Needs `set -g mouse on`.
 
-If you draw your own `pane-border-format` (marker `off`), click-to-restore still
-works — it's based on pane geometry, not on who renders the marker. To get the
-clickable minimize button on normal panes, set `@minimize-button on` and include the
-button icon in your format, e.g.:
-```tmux
-set -g pane-border-format '#{?@minimize_active,#[align=right]#[fg=colour214]  󰘖 ,#[align=right]#[fg=colour244]  󰘕 }'
-```
+This is the supported click path because a *pane* mouse event resolves `#{pane_id}`
+to the exact moused pane. Clicking the border **icon** is deliberately *not* wired up:
+border mouse events resolve to an inconsistent neighbouring pane near column dividers
+and expose no coordinates, and a pane-content click would steal the top cell from
+child TUIs. The border icon is therefore a **state indicator**; toggle with the key
+or the menu. (A focus-based "peek" — temporarily expand a minimized pane while it's
+selected — is planned; see `PLAN.md`.)
 
 ## How it works
 On toggle, the plugin reads `#{window_layout}`, parses the layout tree, forces every
@@ -110,18 +106,18 @@ height) and `@minimize_saved_w` (pre-narrow width), plus a transient global
 `@minimize_guard` used to suppress the resize hooks during the plugin's own resizes.
 
 ## Requirements
-tmux ≥ 3.0 (`select-layout`, `#{window_layout}`, hooks, `MouseDown1Border`/
-`MouseDragEnd1Border`, `#{mouse_x}`/`#{mouse_y}`) and a POSIX shell with `awk`,
-`sort`, `tr` — no GNU-only flags; tested on macOS bash 3.2. Click-to-toggle also
-needs `set -g mouse on`.
+tmux ≥ 3.0 (`select-layout`, `#{window_layout}`, hooks, `MouseDragEnd1Border`,
+`MouseDown1Pane` with pane-relative `#{mouse_x}`/`#{mouse_y}`) and a POSIX shell with
+`awk`, `sort`, `tr` — no GNU-only flags; tested on macOS bash 3.2. Click-to-toggle
+also needs `set -g mouse on`.
 
 ## Known limitations
 - A pane that is **both minimized and at the very top/bottom edge** renders one row
   shorter than `@minimize-height`, because the pane-border status line overlays that
   edge row.
-- Click-to-toggle fires on mouse **press** (`MouseDown1Border`), so beginning a
-  resize-drag from exactly within the marker's right-edge hit region (the last few
-  columns of a border line) will toggle the pane. Grab the border elsewhere to drag.
+- The border **icon is not clickable** — border mouse events resolve to an
+  inconsistent neighbouring pane and carry no coordinates, so they can't be mapped to
+  a pane reliably. Toggle via the key or the right-click menu (`@minimize-menu`).
 - Resizing an **unrelated** pane with the keyboard can nudge a minimized pane; the
   toggle key and mouse-drag paths keep it exact.
 - The auto-forget mechanism (clearing minimized state when you resize a pane
