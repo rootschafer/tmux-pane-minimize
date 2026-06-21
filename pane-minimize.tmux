@@ -29,7 +29,7 @@ tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
 # the rest mirror handy defaults so right-click stays useful. The whole display-menu
 # is one quoted string so tmux parses the item triples as the bound command.
 if [ "$MENU" = "on" ]; then
-  tmux bind-key -T root MouseDown3Pane "display-menu -t = -x M -y M -T \"#[align=centre]#{pane_index}\" \"#{?@minimize_active,Un-Minimize,Minimize}\" m \"run-shell '$SCRIPT toggle #{pane_id}'\" \"\" \"#{?window_zoomed_flag,Unzoom,Zoom}\" z \"resize-pane -Z\" \"Swap Up\" u \"swap-pane -U\" \"Swap Down\" d \"swap-pane -D\" \"\" \"Kill\" X \"kill-pane\""
+  tmux bind-key -T root MouseDown3Pane "display-menu -t = -x M -y M -T \"#[align=centre]#{pane_index}\" \"#{?@minimize_active,Un-Minimize,Minimize}\" m \"run-shell '$SCRIPT toggle #{pane_id}'\" \"\" \"Horizontal Split\" h \"split-window -h\" \"Vertical Split\" v \"split-window -v\" \"#{?window_zoomed_flag,Unzoom,Zoom}\" z \"resize-pane -Z\" \"\" \"Swap Up\" u \"swap-pane -U\" \"Swap Down\" d \"swap-pane -D\" \"#{?pane_marked,Unmark,Mark}\" k \"select-pane -m\" \"\" \"Respawn\" R \"respawn-pane -k\" \"Kill\" X \"kill-pane\""
 fi
 
 # Forget minimized state when the user resizes a pane themselves.
