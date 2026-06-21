@@ -34,6 +34,7 @@ previous size. Re-bind with `@minimize-key`.
 ```tmux
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
 set -g @minimize-height '3'         # minimized height in rows
+set -g @minimize-width  '15'        # minimized width in columns (narrow column)
 set -g @minimize-marker 'off'       # 'on' to show a marker on minimized panes
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
 set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ▼ #[default]'
@@ -55,7 +56,10 @@ pane flagged `@minimize_active` to `@minimize-height`, redistributes the remaini
 height within each vertical split (proportionally), recomputes tmux's layout
 checksum, and applies it atomically with `select-layout`. A pane that sits in a
 horizontal (side-by-side) split collapses its whole row, since panes in a row share
-their height.
+their height. Additionally, when **every** pane within a vertical-split group is
+minimized, that whole group is narrowed to `@minimize-width` columns (default 15)
+and its horizontal neighbour widens to fill — restoring any pane in the group
+widens it back.
 
 State is kept in per-pane options `@minimize_active` and `@minimize_saved`, plus a
 transient global `@minimize_guard` used to suppress the resize hooks during the
@@ -71,6 +75,10 @@ POSIX shell with `awk`, `sort`, `tr` — no GNU-only flags; tested on macOS bash
   edge row.
 - Resizing an **unrelated** pane with the keyboard can nudge a minimized pane; the
   toggle key and mouse-drag paths keep it exact.
+- The auto-forget mechanism (clearing minimized state when you resize a pane
+  manually) only checks height. Manually dragging a narrowed vertical stack wider
+  won't clear its saved widths, so a subsequent full-minimize/restore cycle might
+  restore a stale width.
 
 ## License
 MIT
