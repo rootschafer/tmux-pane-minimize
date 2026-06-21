@@ -16,7 +16,7 @@ KEY="$(opt @minimize-key 'C-t')"
 HEIGHT="$(opt @minimize-height '3')"
 MARKER="$(opt @minimize-marker 'off')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
-MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ⌄ #[default]')"
+MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  ⌄ #[default]')"
 GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => forget
 
 # Toggle key (prefix table).
@@ -41,6 +41,7 @@ tmux bind-key -T root MouseDragEnd1Border run-shell -b \
 
 # Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.
 if [ "$MARKER" = "on" ]; then
+  case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac  # pane-border-status only takes top|bottom
   tmux set-option -g pane-border-status "$MARKER_POS"
   tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},}"
 fi

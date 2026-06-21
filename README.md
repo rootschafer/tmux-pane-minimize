@@ -27,8 +27,22 @@ run-shell ~/clone/of/tmux-pane-minimize/pane-minimize.tmux
 ```
 
 ## Usage
-`prefix` + `Ctrl-t` toggles the active pane between minimized (3 rows) and its
-previous size. Re-bind with `@minimize-key`.
+`prefix` + `Ctrl-t` toggles the active pane between minimized (`@minimize-height`
+rows, default 3) and its previous size. Re-bind with `@minimize-key`.
+
+```
+   before                      after minimizing A and B
+ ┌──────────────┐            ┌──────────────┐ ⌄   ← A, minimized
+ │ A            │            ├──────────────┤ ⌄   ← B, minimized
+ ├──────────────┤            │ C            │
+ │ B            │            │ (expands to  │
+ ├──────────────┤            │  fill)       │
+ │ C            │            │              │
+ └──────────────┘            └──────────────┘
+
+ minimize *every* pane in a vertical stack and the whole column
+ collapses to @minimize-width, letting its neighbour widen to fill.
+```
 
 ## Options
 ```tmux
@@ -37,18 +51,26 @@ set -g @minimize-height '3'         # minimized height in rows
 set -g @minimize-width  '15'        # minimized width in columns (narrow column)
 set -g @minimize-marker 'off'       # 'on' to show a marker on minimized panes
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
-set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold] ⌄ #[default]'
+set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  ⌄ #[default]'
 ```
 
 ### About the marker (opt-in)
 The marker needs a pane-border status line, so enabling `@minimize-marker on`
-makes the plugin set `pane-border-status` and `pane-border-format` for you. If you
-already customize those, leave the marker `off` and add your own conditional on
-`#{@minimize_active}` instead, e.g.:
+makes the plugin set `pane-border-status` and `pane-border-format` for you (this
+replaces the border line's contents with just the marker — non-minimized panes show
+an empty line). If you already customize those, leave the marker `off` and add your
+own conditional on `#{@minimize_active}` instead, e.g.:
 ```tmux
 set -g pane-border-status top
-set -g pane-border-format '#{pane_index} #{?@minimize_active,#[fg=yellow] ⌄ ,}'
+set -g pane-border-format '#{pane_index} #{?@minimize_active,#[fg=yellow]  ⌄ ,}'
 ```
+The leading spaces matter: with `#[align=right]` the border line is drawn right up
+to the marker, so a space or two keeps it from butting against the line.
+
+**Glyph not rendering?** `⌄` (U+2304) is in most fonts, but if you see a box, set
+`@minimize-marker-format` to a glyph your font has — e.g. `v`, `▾`, or a Nerd Font
+chevron. The colour (`colour214`, orange) is also configurable there; pick a
+high-contrast colour if the default is hard to read against your theme.
 
 ## How it works
 On toggle, the plugin reads `#{window_layout}`, parses the layout tree, forces every
@@ -61,9 +83,9 @@ minimized, that whole group is narrowed to `@minimize-width` columns (default 15
 and its horizontal neighbour widens to fill — restoring any pane in the group
 widens it back.
 
-State is kept in per-pane options `@minimize_active` and `@minimize_saved`, plus a
-transient global `@minimize_guard` used to suppress the resize hooks during the
-plugin's own resizes.
+State is kept in per-pane options `@minimize_active`, `@minimize_saved` (pre-minimize
+height) and `@minimize_saved_w` (pre-narrow width), plus a transient global
+`@minimize_guard` used to suppress the resize hooks during the plugin's own resizes.
 
 ## Requirements
 tmux ≥ 3.0 (`select-layout`, `#{window_layout}`, hooks, `MouseDragEnd1Border`) and a
