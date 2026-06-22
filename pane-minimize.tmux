@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tmux-pane-minimize — TPM entry point.
-# Collapse a pane to a few lines and restore it, keeping minimized panes pinned
+# Collapse a pane to a few lines and un-minimize it, keeping minimized panes pinned
 # regardless of layout nesting. See README.md.
 set -u
 
