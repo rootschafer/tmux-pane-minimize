@@ -136,30 +136,59 @@ recompute() {
          recompute "$c" "$xx" "$Y" "$cw" "$H" "$ot" "$ob"; xx=$(( xx + cw + 1 ))
        done ;;
     v) # distribute HEIGHT; every child spans full width W at column X.
-       local kids="${NC[$id]}" n i avail fixed wsum c weight hc rest assigned last yy wm bonus otc obc allmin
+       local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
+       local rcount rtgt rfix isr first lastp cap
        set -- $kids; n=$#
        avail=$(( H - (n - 1) ))
        wsum=0; for c in $kids; do wants_min "$c"; [ "$RET" = 0 ] && wsum=$((wsum+1)); done
        allmin=0; [ "$wsum" -eq 0 ] && allmin=1   # whole stack minimized: fill height proportionally
-       fixed=0; wsum=0; last=""; i=0
+       # The "restore pane" (#{WPANE}, saved height WVAL) is the pane being
+       # un-minimized or peeked. Pin it to its EXACT saved height (like minimized
+       # panes are pinned to MIN_H) so it returns to its prior size instead of a
+       # skewed proportional share — but only when another flexible pane exists to
+       # absorb the remainder; otherwise it stays the flexible pane that fills.
+       # pass 0: minimized fixed height (fixmin) and count of other flex panes.
+       fixmin=0; rcount=0; i=0
        for c in $kids; do
+         first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
          wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
          if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$([ $i -eq 0 ] && echo 1 || echo 0)" "$([ $i -eq $((n-1)) ] && echo 1 || echo 0)" "$ot" "$ob"
-           fixed=$(( fixed + MIN_H + RET ))
-         else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
-              wsum=$(( wsum + weight )); last=$c; fi
+           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; fixmin=$(( fixmin + MIN_H + RET ))
+         elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
+           :   # the restore pane, handled below
+         else rcount=$(( rcount + 1 )); fi
+         i=$((i+1))
+       done
+       rfix=0; rtgt=0
+       if [ -n "$WPANE" ] && [ "$WVAL" -gt 0 ] && [ "$rcount" -ge 1 ]; then
+         rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
+         cap=$(( avail - fixmin - rcount )); [ "$rtgt" -gt "$cap" ] && rtgt=$cap   # leave >=1 per flex pane
+         [ "$rtgt" -lt 1 ] && rtgt=1
+       fi
+       fixed=$fixmin; [ "$rfix" = 1 ] && fixed=$(( fixed + rtgt ))
+       # pass 1: flex weight sum (flex = non-min, and not the pinned restore pane)
+       wsum=0; last=""; i=0
+       for c in $kids; do
+         wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
+         isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
+         if [ "$wm" != 1 ] && [ "$isr" != 1 ]; then
+           weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
+           wsum=$(( wsum + weight )); last=$c
+         fi
          i=$((i+1))
        done
        rest=$(( avail - fixed )); [ "$rest" -lt 0 ] && rest=0
        [ "$wsum" -le 0 ] && wsum=1
+       # pass 2: assign
        assigned=0; yy=$Y; i=0
        for c in $kids; do
          otc=0; obc=0; [ "$i" -eq 0 ] && otc=$ot; [ "$i" -eq $((n-1)) ] && obc=$ob
+         first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
          wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
+         isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
          if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$([ $i -eq 0 ] && echo 1 || echo 0)" "$([ $i -eq $((n-1)) ] && echo 1 || echo 0)" "$ot" "$ob"
-           hc=$(( MIN_H + RET ))
+           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; hc=$(( MIN_H + RET ))
+         elif [ "$isr" = 1 ]; then hc=$rtgt
          elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1
          else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
               hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fi

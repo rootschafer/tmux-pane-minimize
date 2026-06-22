@@ -31,6 +31,12 @@ tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
 tmux set-hook -g after-resize-pane \
   "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}},#{>:#{pane_height},$GROW}}}' 'set-option -p @minimize_active 0'"
 
+# If the user resizes a pane *while it is peeked* (expanded for inspection), remember
+# the new height as its saved size so future peeks / un-minimize use it. set-option
+# does NOT expand #{pane_height}, so capture it through run-shell (which does).
+tmux set-hook -a -g after-resize-pane \
+  "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{@minimize_active},#{@minimize_peek}}}' 'run-shell -b \"tmux set-option -t #{pane_id} -p @minimize_saved #{pane_height}\"'"
+
 # Terminal/window resize rescales panes (fires after-resize-window, not
 # after-resize-pane) -> re-pin every minimized pane.
 tmux set-hook -g after-resize-window "run-shell -b \"$SCRIPT repin #{window_id}\""
@@ -40,13 +46,16 @@ tmux set-hook -g after-resize-window "run-shell -b \"$SCRIPT repin #{window_id}\
 # The trailing ': ok' forces exit 0 — otherwise the loop's last failed &&-test
 # would make run-shell report a non-zero exit and dump the command into the pane.
 tmux bind-key -T root MouseDragEnd1Border run-shell -b \
-  "tmux list-panes -t '#{window_id}' -F '##{pane_id} ##{?@minimize_active,1,0} ##{pane_height} ##{?@minimize_peek,1,0}' | while read id a h p; do { [ \"\$a\" = 1 ] && [ \"\$p\" != 1 ] && [ \"\$h\" -gt $GROW ]; } && tmux set-option -t \"\$id\" -p @minimize_active 0; done; : ok"
+  "tmux list-panes -t '#{window_id}' -F '##{pane_id} ##{?@minimize_active,1,0} ##{pane_height} ##{?@minimize_peek,1,0}' | while read id a h p; do if [ \"\$a\" = 1 ] && [ \"\$p\" = 1 ]; then tmux set-option -t \"\$id\" -p @minimize_saved \"\$h\"; elif [ \"\$a\" = 1 ] && [ \"\$h\" -gt $GROW ]; then tmux set-option -t \"\$id\" -p @minimize_active 0; fi; done; : ok"
 
 # Peek-on-focus: temporarily expand a minimized pane while selected. Gated on
 # @minimize-peek (default on). Requires focus-events on (already set in dotfiles).
 if [ "$PEEK" = "on" ]; then
-  tmux set-hook -a -g pane-focus-in  "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id}\"'"
-  tmux set-hook -a -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id}\"'"
+  # set-hook -g (replace), NOT -a (append): appending re-adds a copy on every plugin
+  # reload, so the hook would fire N times. Replace keeps exactly one. (We own the
+  # pane-focus-in/out hooks; the after-resize-pane chain above is reset the same way.)
+  tmux set-hook -g pane-focus-in  "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id}\"'"
+  tmux set-hook -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id}\"'"
 fi
 
 # Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.

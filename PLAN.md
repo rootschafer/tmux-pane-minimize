@@ -1,119 +1,81 @@
 # Roadmap — toward the best tmux pane-minimize plugin
 
-Status of the codebase and the concrete next steps. Anything marked **DESIGN-READY**
-has a complete implementation plan below and just needs to be built + tested.
+Status of the codebase and concrete next steps. **DESIGN-READY** items have a complete
+implementation plan and just need building + testing.
 
 ## What works today
-- Toggle minimize/restore of the active pane (`prefix` + `@minimize-key`, default `C-t`).
+- Toggle minimize/un-minimize of the active pane (`prefix` + `@minimize-key`, default `C-t`).
 - Correct layout math for **arbitrary nesting** (rewrites the window-layout tree +
   recomputes tmux's checksum, applied atomically via `select-layout`).
 - **Width-collapse**: when every pane in a vertical stack is minimized, the whole
-  column narrows to `@minimize-width` and its neighbour widens; restoring widens back.
-- **Forget-on-manual-resize** (keyboard, `resize-pane`, border drag) but not on
-  terminal/window resize (those re-pin).
+  column narrows to `@minimize-width` and its neighbour widens; un-minimizing widens back.
+- **Peek-on-focus** (`@minimize-peek`, default on): selecting a minimized pane (click or
+  keyboard nav) temporarily expands it to its saved height; leaving re-collapses it,
+  keeping its minimized state. Lets you cycle through and inspect minimized panes.
+- **Exact-height un-minimize/peek** (fixed this session): the pane being un-minimized or
+  peeked is pinned to its **exact saved height** (other flexible panes absorb the
+  remainder), instead of a skewed proportional share. Verified: peek returns 19→19,
+  not 19→14.
+- **Resize-while-peeked is remembered** (this session): resizing a peeked pane
+  (keyboard/`resize-pane` via the `after-resize-pane` save-hook, or mouse drag via
+  `MouseDragEnd1Border`) writes the new height into `@minimize_saved`, so future
+  peeks/un-minimize use it.
+- **Forget-on-manual-resize** for a *non-peeked* minimized pane (clears its minimized
+  state); skips peeked panes; ignores terminal/window resize (those re-pin).
 - **State indicator icon** on minimized panes (opt-in `@minimize-marker`, or via your
   own `pane-border-format` reading `#{@minimize_active}`).
-- **Right-click menu** item "Minimize / Un-Minimize" (opt-in `@minimize-menu`).
-- Offline `selftest`; macOS bash 3.2 compatible; `run-shell` paths force exit 0.
+- Idempotent plugin reload: hooks use `set-hook -g` (replace) / a `-g` + `-a` reset
+  pair, so reloading never duplicates a hook. Offline `selftest`; macOS bash 3.2
+  compatible; all `run-shell` paths force exit 0.
 
 ## Locked design decisions
 1. **The border icon is NOT clickable, by design.** tmux border mouse events (a)
-   resolve `#{pane_id}` to an *inconsistent* neighbouring pane near column dividers
-   (verified: a left-column icon resolved to the pane above; a right-edge icon
-   resolved correctly) and (b) expose **no** `#{mouse_x}`/`#{mouse_y}`. There is no
-   way to map a border-icon click to its owning pane reliably across layouts.
-   Rejected alternatives: a pane-content hot-corner (steals the top-left cell from
-   child TUIs — unacceptable); `border-status bottom` (same junction ambiguity).
-   → The icon is a **state indicator**; toggling is via key + right-click menu.
-2. **Click path = right-click menu**, because a *pane* event resolves `#{pane_id}`
-   exactly. (Default `MouseDown1Pane` is left untouched: click-to-focus and mouse
-   forwarding to child apps are preserved.)
-3. Plugin is **vendored + loaded natively** in the dotfiles (not TPM); the standalone
-   repo stays published for TPM users.
+   resolve `#{pane_id}` to an *inconsistent* neighbouring pane near column dividers and
+   (b) expose **no** `#{mouse_x}`/`#{mouse_y}`. No reliable way to map a border-icon
+   click to its owning pane. Rejected: pane-content hot-corner (steals a cell from child
+   TUIs); `border-status bottom` (same junction ambiguity). The icon is a **state
+   indicator**; toggling is via key, the right-click menu, or peek.
+2. **Right-click "Minimize/Un-Minimize"** lives in the user's `shared-config.nix`
+   `display-menu`, not in the plugin — a *pane* event resolves `#{pane_id}` exactly, and
+   the user owns their full menu. (The plugin no longer binds `MouseDown3Pane`.)
+3. Dotfiles loads the plugin natively from the standalone working tree
+   (`run-shell ~/tmux-pane-minimize/pane-minimize.tmux`) — no nix-store copy, so repo
+   edits take effect on tmux config reload without a rebuild. Repo stays published for TPM.
+4. **`set-option` does not expand `#{...}`** — capture formats via `run-shell` when a
+   hook needs e.g. `#{pane_height}` written into an option.
 
----
+## Next priorities
 
-## DESIGN-READY: Peek-on-focus (temporary expand while selected)
-
-**Goal:** selecting a minimized pane (by click or keyboard nav) temporarily expands it
-so you can inspect it; leaving it re-collapses it — without clearing its minimized
-state. Lets you cycle through minimized panes without re-toggling. Default **on**,
-disable with the user option `set -g @minimize-peek off`.
-
-### State
-- New transient per-pane user option `@minimize_peek` (`1` while peeking).
-- A pane is "logically minimized" when `@minimize_active=1`. It is *displayed*
-  minimized when `@minimize_active=1 AND @minimize_peek!=1`.
-
-### Engine changes (`scripts/tmux-min.sh`)
-- `apply()` builds `MINSET` from panes where **`@minimize_active=1 AND @minimize_peek!=1`**
-  (one extra `#{?...}` in the `list-panes -F`). Peeking panes are excluded → the
-  existing layout math expands them automatically.
-- The peeked pane should expand to ~its saved size: reuse the restore weight path
-  (`WPANE`/`WVAL` = the pane's `@minimize_saved`) so it rejoins at roughly its prior
-  height instead of an even share.
-- `toggle_pane()` on restore must also clear `@minimize_peek` (a real un-minimize
-  ends any peek).
-- New subcommands: `peekin <pane_id>` (set `@minimize_peek=1`, guard, `apply`) and
-  `peekout <pane_id>` (unset `@minimize_peek`, guard, `apply`).
-
-### Hooks (`pane-minimize.tmux`) — gated on `@minimize-peek on`
-Requires `focus-events on` (already set in this dotfiles config).
-```tmux
-set-hook -g pane-focus-in  "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id}\"'"
-set-hook -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id}\"'"
-```
-(These hooks may already be set by other plugins; append rather than overwrite if so —
-tmux `set-hook -a`.)
-
-### Critical interactions to handle (and test)
-- **Forget-on-resize false trigger:** a peeking pane is tall, so the existing
-  `after-resize-pane` forget rule (`@minimize_active && height>GROW → clear`) would
-  *permanently* un-minimize it. Fix: add `&& #{!=:#{@minimize_peek},1}` to that rule.
-- **Loop safety:** engine resizes are wrapped in `@minimize_guard`; `select-layout`
-  changes size, not focus, so it should not re-fire focus hooks. Still, have `peekin`/
-  `peekout` no-op when `@minimize_guard=1`.
-- **Window/terminal resize while peeking:** `repin` must keep peeking panes expanded
-  (automatic, since they're excluded from `MINSET`).
-- **Closing a peeking pane / last pane:** ensure no dangling `@minimize_peek`.
-
-### Verification
-- Offline: extend `selftest` with a peek case (pane flagged active+peek → excluded
-  from MINSET → expands; flagged active only → minimized).
-- Live (isolated server): minimize a stack pane; focus it (expect expand); focus away
-  (expect collapse); keyboard-nav through several minimized panes (each peeks);
-  confirm the forget rule does NOT clear state on peek; window resize keeps peek.
-
-### Optional companions
-- `@minimize-peek-key`: a key that cycles focus through minimized panes (peeking each).
-- A short re-collapse debounce so transient focus flicker doesn't thrash the layout.
-
----
-
-## Other features (rough priority)
-
-1. **Minimize-all / restore-all** keys (`@minimize-all-key`): collapse every non-active
-   pane; restore all. Engine already handles multi-pane MINSET, so this is mostly a
-   key + setting all panes' `@minimize_active`.
-2. **Keyboard menu**: bind a key to the same `display-menu` for users without mouse.
-3. **tmux-resurrect/continuum persistence**: save & restore `@minimize_active` (+ saved
-   height/width) so minimized state survives a restart. Hook resurrect's save/restore.
-4. **Compose with an existing `pane-border-format`** instead of overwriting it when
-   `@minimize-marker on` (detect and wrap the current format).
-5. **Status-line count**: a format fragment exposing "N minimized" for the status bar.
-6. **Per-scope sizes**: allow `@minimize-height`/`-width` overrides per window/pane.
-7. **Edge-nibble polish**: currently an edge minimized pane renders 1 row short under a
-   border-status line; explore compensating in the layout math universally.
-8. **Width auto-forget**: the manual-resize forget rule only checks height; add a width
+1. **Keyboard menu / minimize-all**: bind a key to a `display-menu` (mouse-free toggle),
+   and a "minimize every other pane / restore all" key (`@minimize-all-key`). The engine
+   already handles a multi-pane MINSET.
+2. **DESIGN-READY — peek polish**:
+   - `@minimize-peek-key`: cycle focus through minimized panes (peek each in turn).
+   - Optional small re-collapse debounce so rapid focus flicker doesn't thrash the layout.
+   - Audit edge cases: closing a pane mid-peek (dangling `@minimize_peek`); a peeked pane
+     that becomes the only pane; zoom interactions.
+3. **tmux-resurrect/continuum persistence**: save & restore `@minimize_active` +
+   `@minimize_saved`/`@minimize_saved_w` so minimized state survives a restart. Start
+   only once the feature set is stable.
+4. **Compose with an existing `pane-border-format`** when `@minimize-marker on` (wrap the
+   current format rather than overwriting it).
+5. **Status-line count** (`N minimized`); **per-scope sizes** (`@minimize-height/-width`
+   overrides per window/pane).
+6. **Edge-nibble polish**: an edge minimized pane renders 1 row short under a
+   border-status line (`_edge_bonus` compensates partially); make it universal.
+7. **Width auto-forget**: the manual-resize forget rule only checks height; add a width
    check so dragging a narrowed stack wider clears its saved widths.
 
 ## Project / quality
 - **CI** (GitHub Actions): `bash -n` + `selftest` on macOS and Linux; shellcheck.
+- Expand `selftest` into a table-driven suite that also exercises the peek/un-minimize
+  weight path (`transform` with WPANE/WVAL), not just MINSET membership.
 - **Demo**: asciinema/GIF in the README (minimize, stack-narrow, peek, menu).
-- **Publish** to the TPM plugin list once peek + CI land.
-- Expand `selftest` into a small table-driven suite (more nestings, edge cases).
+- **Publish** to the TPM plugin list once the keyboard menu + CI land.
 
-## Open questions (need a decision before building)
-- Peek re-collapse: immediate on focus-out, or after a short delay? (Default: immediate.)
-- Should `@minimize-menu` replace plain right-click, or live only under a submenu of the
-  default `M-MouseDown3Pane` menu? (Current: binds plain `MouseDown3Pane`.)
+## Known issues / watch-list
+- Peek hooks are single-owner (`set-hook -g pane-focus-in/out`): if another plugin also
+  uses those hooks, last-writer-wins. Composing politely needs a hook-merge mechanism
+  tmux doesn't provide directly — revisit if it ever matters.
+- `selftest`'s peek line only checks MINSET exclusion; the exact-height pinning is
+  covered by the isolated-server tests, not offline yet.
