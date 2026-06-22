@@ -137,7 +137,7 @@ recompute() {
        done ;;
     v) # distribute HEIGHT; every child spans full width W at column X.
        local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
-       local rcount rtgt rfix isr first lastp cap
+       local rcount rtgt rfix isr first lastp cap rpresent
        set -- $kids; n=$#
        avail=$(( H - (n - 1) ))
        wsum=0; for c in $kids; do wants_min "$c"; [ "$RET" = 0 ] && wsum=$((wsum+1)); done
@@ -148,19 +148,22 @@ recompute() {
        # skewed proportional share — but only when another flexible pane exists to
        # absorb the remainder; otherwise it stays the flexible pane that fills.
        # pass 0: minimized fixed height (fixmin) and count of other flex panes.
-       fixmin=0; rcount=0; i=0
+       fixmin=0; rcount=0; rpresent=0; i=0
        for c in $kids; do
          first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
          wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
          if [ "$wm" = 1 ]; then
            _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; fixmin=$(( fixmin + MIN_H + RET ))
          elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
-           :   # the restore pane, handled below
+           rpresent=1   # the restore pane is a direct child of THIS vertical node
          else rcount=$(( rcount + 1 )); fi
          i=$((i+1))
        done
+       # Pin the restore pane to its saved height only when it is actually in this node
+       # AND another flex pane can absorb the freed space. (rpresent guards against a
+       # sibling column reserving height for a restore pane that isn't in it.)
        rfix=0; rtgt=0
-       if [ -n "$WPANE" ] && [ "$WVAL" -gt 0 ] && [ "$rcount" -ge 1 ]; then
+       if [ "$rpresent" = 1 ] && [ "$rcount" -ge 1 ]; then
          rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
          cap=$(( avail - fixmin - rcount )); [ "$rtgt" -gt "$cap" ] && rtgt=$cap   # leave >=1 per flex pane
          [ "$rtgt" -lt 1 ] && rtgt=1
