@@ -22,11 +22,40 @@ MIN_W=$(tmux show-option -gqv @minimize-width  2>/dev/null || true); case "$MIN_
 # ---- layout tree (parallel arrays; node = index) ----
 LS=""; POS=0; NN=0
 declare -a NT NW NH NX NY NP NC WM FM
+declare -a RC_SZ RC_FLEX RC_CID   # reconcile scratch (transient; copied to locals before recursion)
+RC_N=0; RC_AVAIL=0
 MINSET=" "          # " 1 4 7 " minimized pane numbers
 SAVEDW=" "          # " 1:80 4:80 " pane-number:saved-width (pre-narrow widths)
 WPANE=""; WVAL=0    # height restore weight override
 BORDER_POS=off
 RINT=0; RET=0
+
+# ---- per-window mutex (atomic mkdir; portable — macOS has no flock) ----
+# The focus/resize hooks invoke this engine with `run-shell -b`, so several copies
+# can run at once. The old single global @minimize_guard was a check-then-set with a
+# TOCTOU window, so concurrent peekin/peekout could both read guard=0 and apply
+# conflicting layouts (verified: 47 overlapping applies under a focus ping-pong).
+# An mkdir lock actually serializes them. A stale lock from a killed holder is
+# reclaimed via its recorded PID; a safety valve proceeds after ~6s so a wedged lock
+# can never hang a keystroke.
+LOCKDIR=""
+_lock() {
+  local key d holder n=0
+  key=$(printf '%s' "${1:-global}" | tr -c 'A-Za-z0-9' '_')
+  d="${TMPDIR:-/tmp}/tmux-min-$key.lock"
+  while ! mkdir "$d" 2>/dev/null; do
+    holder=$(cat "$d/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -f "$d/pid" 2>/dev/null; rmdir "$d" 2>/dev/null; continue   # stale holder: reclaim
+    fi
+    n=$((n + 1)); [ "$n" -ge 300 ] && break                          # ~6s safety valve
+    sleep 0.02
+  done
+  printf '%s' "$$" > "$d/pid" 2>/dev/null || true
+  LOCKDIR="$d"
+}
+_unlock() { [ -n "${LOCKDIR:-}" ] && { rm -f "$LOCKDIR/pid" 2>/dev/null; rmdir "$LOCKDIR" 2>/dev/null; }; LOCKDIR=""; }
+trap _unlock EXIT
 
 _read_int() { RINT=""; local ch
   while [ "$POS" -lt "${#LS}" ]; do ch="${LS:$POS:1}"; case "$ch" in
@@ -109,13 +138,51 @@ _fixed_width() {
   RET=-1
 }
 
+# reconcile: force RC_SZ[0..RC_N-1] to sum EXACTLY to RC_AVAIL with every entry >=1.
+# This is the safety net that guarantees a split's children always tile their parent
+# no matter what the size logic produced (tiny window where MIN_H/MIN_W can't fit,
+# a stale @minimize_saved/_w larger than the now-smaller window, a degenerate WVAL).
+# Without it the engine can emit a layout whose children don't sum to the parent, and
+# tmux SILENTLY applies it — squishing a pane toward zero. Surplus goes to a flexible
+# child; a deficit is shaved off the tallest (flexible first) so minimized panes keep
+# MIN_H whenever the window can afford it. No-op when sizes already sum exactly.
+reconcile() {
+  local i s delta best bi
+  i=0; while [ "$i" -lt "$RC_N" ]; do [ "${RC_SZ[$i]}" -lt 1 ] && RC_SZ[$i]=1; i=$((i+1)); done
+  s=0; i=0; while [ "$i" -lt "$RC_N" ]; do s=$(( s + RC_SZ[i] )); i=$((i+1)); done
+  delta=$(( RC_AVAIL - s ))
+  if [ "$delta" -gt 0 ]; then
+    bi=-1; i=0; while [ "$i" -lt "$RC_N" ]; do [ "${RC_FLEX[$i]}" = 1 ] && bi=$i; i=$((i+1)); done
+    [ "$bi" -lt 0 ] && bi=$(( RC_N - 1 ))
+    RC_SZ[$bi]=$(( RC_SZ[bi] + delta ))
+  elif [ "$delta" -lt 0 ]; then
+    delta=$(( -delta ))
+    while [ "$delta" -gt 0 ]; do
+      best=0; bi=-1; i=0          # prefer the tallest FLEX child >1
+      while [ "$i" -lt "$RC_N" ]; do
+        if [ "${RC_FLEX[$i]}" = 1 ] && [ "${RC_SZ[$i]}" -gt 1 ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
+        i=$((i+1))
+      done
+      if [ "$bi" -lt 0 ]; then    # none flexible left; shave the tallest fixed child >1
+        i=0; while [ "$i" -lt "$RC_N" ]; do
+          if [ "${RC_SZ[$i]}" -gt 1 ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
+          i=$((i+1))
+        done
+      fi
+      [ "$bi" -lt 0 ] && break     # everything already at 1: window can't fit n panes
+      RC_SZ[$bi]=$(( RC_SZ[bi] - 1 )); delta=$(( delta - 1 ))
+    done
+  fi
+}
+
 recompute() {
   local id=$1 X=$2 Y=$3 W=$4 H=$5 ot=$6 ob=$7
   NX[$id]=$X; NY[$id]=$Y; NW[$id]=$W; NH[$id]=$H
   case "${NT[$id]}" in
     leaf) ;;
     h) # distribute WIDTH; every child spans full height H at row Y.
-       local kids="${NC[$id]}" n avail c fw flexsum rest assigned last xx cw
+       local kids="${NC[$id]}" n avail c fw flexsum rest assigned last xx cw allfix fl i
+       local -a hSZ hCID
        set -- $kids; n=$#
        avail=$(( W - (n - 1) ))
        flexsum=0; assigned=0; last=""
@@ -124,20 +191,41 @@ recompute() {
          if [ "$fw" -ge 0 ]; then assigned=$(( assigned + fw ))
          else flexsum=$(( flexsum + NW[c] )); last=$c; fi
        done
-       rest=$(( avail - assigned )); [ "$rest" -lt 0 ] && rest=0
-       [ -z "$last" ] && { flexsum=$avail; }   # all fixed: fall back to proportional over all
+       # If EVERY child is fixed-width (e.g. all columns fully minimized) there is no
+       # flexible neighbour to absorb the freed width. Don't strand it: treat every
+       # child as flexible and distribute the FULL row width proportionally by original
+       # width, with the last child taking the remainder so the row sum stays exact.
+       # (The old code reused `rest` = avail-fixed and had no remainder pane, so it
+       # lost ~sum(MIN_W) columns -> a malformed layout tmux silently squished.)
+       allfix=0
+       if [ -z "$last" ]; then
+         allfix=1; flexsum=0
+         for c in $kids; do flexsum=$(( flexsum + NW[c] )); last=$c; done
+         rest=$avail
+       else
+         rest=$(( avail - assigned )); [ "$rest" -lt 0 ] && rest=0
+       fi
        [ "$flexsum" -le 0 ] && flexsum=1
-       xx=$X; assigned=0
+       # collect each child's width + a "flexible" flag (fixed columns -> 0)
+       assigned=0; i=0
        for c in $kids; do
          _fixed_width "$c"; fw=$RET
-         if [ "$fw" -ge 0 ] && [ -n "$last" ]; then cw=$fw
-         elif [ "$c" = "$last" ]; then cw=$(( rest - assigned )); [ "$cw" -lt 1 ] && cw=1
-         else cw=$(( NW[c] * rest / flexsum )); [ "$cw" -lt 1 ] && cw=1; assigned=$(( assigned + cw )); fi
-         recompute "$c" "$xx" "$Y" "$cw" "$H" "$ot" "$ob"; xx=$(( xx + cw + 1 ))
+         if [ "$allfix" != 1 ] && [ "$fw" -ge 0 ]; then cw=$fw; fl=0
+         elif [ "$c" = "$last" ]; then cw=$(( rest - assigned )); [ "$cw" -lt 1 ] && cw=1; fl=1
+         else cw=$(( NW[c] * rest / flexsum )); [ "$cw" -lt 1 ] && cw=1; assigned=$(( assigned + cw )); fl=1; fi
+         RC_SZ[$i]=$cw; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; i=$((i+1))
+       done
+       RC_N=$n; RC_AVAIL=$avail; reconcile
+       hSZ=( "${RC_SZ[@]}" ); hCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
+       xx=$X; i=0
+       while [ "$i" -lt "$n" ]; do
+         recompute "${hCID[$i]}" "$xx" "$Y" "${hSZ[$i]}" "$H" "$ot" "$ob"
+         xx=$(( xx + hSZ[i] + 1 )); i=$((i+1))
        done ;;
     v) # distribute HEIGHT; every child spans full width W at column X.
        local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
-       local rcount rtgt rfix isr first lastp cap rpresent
+       local rcount rtgt rfix isr first lastp cap rpresent fl
+       local -a vSZ vCID vOT vOB
        set -- $kids; n=$#
        avail=$(( H - (n - 1) ))
        wsum=0; for c in $kids; do wants_min "$c"; [ "$RET" = 0 ] && wsum=$((wsum+1)); done
@@ -182,21 +270,30 @@ recompute() {
        done
        rest=$(( avail - fixed )); [ "$rest" -lt 0 ] && rest=0
        [ "$wsum" -le 0 ] && wsum=1
-       # pass 2: assign
-       assigned=0; yy=$Y; i=0
+       # pass 2: collect each child's height + flex flag + edge flags, then reconcile.
+       # flex (fl=1) = proportional pane; minimized + pinned-restore panes are fl=0 so
+       # reconcile preserves their MIN_H / saved height unless the window can't afford it.
+       assigned=0; i=0
        for c in $kids; do
          otc=0; obc=0; [ "$i" -eq 0 ] && otc=$ot; [ "$i" -eq $((n-1)) ] && obc=$ob
          first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
          wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
          isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
          if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; hc=$(( MIN_H + RET ))
-         elif [ "$isr" = 1 ]; then hc=$rtgt
-         elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1
+           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; hc=$(( MIN_H + RET )); fl=0
+         elif [ "$isr" = 1 ]; then hc=$rtgt; fl=0
+         elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1; fl=1
          else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
-              hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fi
-         recompute "$c" "$X" "$yy" "$W" "$hc" "$otc" "$obc"; yy=$(( yy + hc + 1 ))
+              hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fl=1; fi
+         RC_SZ[$i]=$hc; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; vOT[$i]=$otc; vOB[$i]=$obc
          i=$((i+1))
+       done
+       RC_N=$n; RC_AVAIL=$avail; reconcile
+       vSZ=( "${RC_SZ[@]}" ); vCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
+       yy=$Y; i=0
+       while [ "$i" -lt "$n" ]; do
+         recompute "${vCID[$i]}" "$X" "$yy" "$W" "${vSZ[$i]}" "${vOT[$i]}" "${vOB[$i]}"
+         yy=$(( yy + vSZ[i] + 1 )); i=$((i+1))
        done ;;
   esac
 }
@@ -208,7 +305,7 @@ serialize() {
     leaf) s="$s,${NP[$id]}" ;;
     h|v)  for c in ${NC[$id]}; do serialize "$c"; parts="$parts,$RET"; done
           parts="${parts#,}"
-          if [ "${NT[$id]}" = "h" ]; then s="$s{$parts}"; else s="$s[$parts]"; fi ;;
+          if [ "${NT[$id]}" = "h" ]; then s="${s}{$parts}"; else s="${s}[$parts]"; fi ;;
   esac
   RET=$s
 }
@@ -242,6 +339,7 @@ toggle_pane() {
   local pane="$1" win num saved
   win=$(tmux display-message -p -t "$pane" '#{window_id}')
   num=$(tmux display-message -p -t "$pane" '#{pane_id}' | tr -d '%')
+  _lock "$win"
   tmux set-option -g @minimize_guard 1
   if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_active,1,0}')" = 1 ]; then
     tmux set-option -t "$pane" -p @minimize_active 0
@@ -255,28 +353,43 @@ toggle_pane() {
     apply "$win"
   fi
   tmux set-option -gu @minimize_guard
+  _unlock
 }
 
+# peekin/peekout serialize on the window lock, then RE-CHECK live state so the result
+# matches reality regardless of which queued hook wins the lock: only peek a pane that
+# is still minimized, not already peeking, AND currently the active pane; only collapse
+# a pane that is peeking and no longer active. This makes a rapid focus ping-pong
+# converge deterministically to the final-focus state instead of a last-writer race.
 peekin() {
   local pane="$1" win num saved
-  [ "$(tmux show-option -gqv @minimize_guard 2>/dev/null || true)" = "1" ] && return 0
   win=$(tmux display-message -p -t "$pane" '#{window_id}')
-  num=$(tmux display-message -p -t "$pane" '#{pane_id}' | tr -d '%')
-  tmux set-option -g @minimize_guard 1
-  tmux set-option -t "$pane" -p @minimize_peek 1
-  saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
-  apply "$win" "$num" "$saved"
-  tmux set-option -gu @minimize_guard
+  _lock "$win"
+  if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_active,1,0}')" = 1 ] \
+     && [ "$(tmux display-message -p -t "$pane" '#{?@minimize_peek,1,0}')" != 1 ] \
+     && [ "$(tmux display-message -p -t "$pane" '#{pane_active}')" = 1 ]; then
+    num=$(tmux display-message -p -t "$pane" '#{pane_id}' | tr -d '%')
+    tmux set-option -g @minimize_guard 1
+    tmux set-option -t "$pane" -p @minimize_peek 1
+    saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
+    apply "$win" "$num" "$saved"
+    tmux set-option -gu @minimize_guard
+  fi
+  _unlock
 }
 
 peekout() {
   local pane="$1" win
-  [ "$(tmux show-option -gqv @minimize_guard 2>/dev/null || true)" = "1" ] && return 0
   win=$(tmux display-message -p -t "$pane" '#{window_id}')
-  tmux set-option -g @minimize_guard 1
-  tmux set-option -t "$pane" -pu @minimize_peek
-  apply "$win"
-  tmux set-option -gu @minimize_guard
+  _lock "$win"
+  if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_peek,1,0}')" = 1 ] \
+     && [ "$(tmux display-message -p -t "$pane" '#{pane_active}')" != 1 ]; then
+    tmux set-option -g @minimize_guard 1
+    tmux set-option -t "$pane" -pu @minimize_peek
+    apply "$win"
+    tmux set-option -gu @minimize_guard
+  fi
+  _unlock
 }
 
 case "${1:-}" in
@@ -284,7 +397,7 @@ case "${1:-}" in
   peekin)    peekin "$2" ;;
   peekout)   peekout "$2" ;;
   repin)
-    tmux set-option -g @minimize_guard 1; apply "$2"; tmux set-option -gu @minimize_guard ;;
+    _lock "$2"; tmux set-option -g @minimize_guard 1; apply "$2"; tmux set-option -gu @minimize_guard; _unlock ;;
   selftest)
     L='02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}'
     echo "in : $L"

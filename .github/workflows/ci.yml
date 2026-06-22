@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest ships bash 3.2 at /bin/bash, which enforces the macOS bash 3.2
+        # compatibility constraint the suites run under. ubuntu adds a second tmux/libc.
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tmux + shellcheck (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux shellcheck
+
+      - name: Install tmux (Linux; shellcheck is preinstalled)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Versions
+        run: |
+          /bin/bash --version | head -1
+          tmux -V
+          shellcheck --version | head -2
+
+      - name: Syntax check (bash -n)
+        run: |
+          for f in scripts/tmux-min.sh pane-minimize.tmux tests/*.sh; do
+            /bin/bash -n "$f"
+          done
+
+      - name: ShellCheck (warning severity)
+        run: shellcheck -s bash -S warning scripts/tmux-min.sh pane-minimize.tmux tests/*.sh
+
+      - name: Offline property suite + live suite
+        run: /bin/bash tests/run.sh
