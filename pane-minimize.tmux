@@ -15,7 +15,6 @@ opt() { # @name  default
 KEY="$(opt @minimize-key 'C-t')"
 HEIGHT="$(opt @minimize-height '3')"
 MARKER="$(opt @minimize-marker 'off')"
-MENU="$(opt @minimize-menu 'off')"
 PEEK="$(opt @minimize-peek 'on')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
 MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]')"
@@ -23,15 +22,6 @@ GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => for
 
 # Toggle key (prefix table).
 tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
-
-# Right-click menu (opt-in). This is the reliable click path: a pane mouse event
-# resolves #{pane_id} to the exact moused pane (border clicks do not, and a content
-# click would steal a cell from child TUIs). The menu's first item toggles minimize;
-# the rest mirror handy defaults so right-click stays useful. The whole display-menu
-# is one quoted string so tmux parses the item triples as the bound command.
-if [ "$MENU" = "on" ]; then
-  tmux bind-key -T root MouseDown3Pane "display-menu -t = -x M -y M -T \"#[align=centre]#{pane_index}\" \"#{?@minimize_active,Un-Minimize,Minimize}\" m \"run-shell '$SCRIPT toggle #{pane_id}'\" \"\" \"Copy Line\" l \"run-shell -b 'tmux capture-pane -J -p | tail -1 | pbcopy'\" \"Horizontal Split\" h \"split-window -h\" \"Vertical Split\" v \"split-window -v\" \"#{?window_zoomed_flag,Unzoom,Zoom}\" z \"resize-pane -Z\" \"\" \"Swap Up\" u \"swap-pane -U\" \"Swap Down\" d \"swap-pane -D\" \"Swap Marked\" S \"swap-pane\" \"#{?pane_marked,Unmark,Mark}\" k \"select-pane -m\" \"\" \"Respawn\" R \"respawn-pane -k\" \"Kill\" X \"kill-pane\""
-fi
 
 # Forget minimized state when the user resizes a pane themselves.
 #  - keyboard / resize-pane command fires after-resize-pane
