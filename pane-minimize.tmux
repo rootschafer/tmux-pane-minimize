@@ -85,8 +85,8 @@ if [ "$PEEK" = "on" ]; then
   # set-hook -g (replace), NOT -a (append): appending re-adds a copy on every plugin
   # reload, so the hook would fire N times. Replace keeps exactly one. (We own the
   # pane-focus-in/out hooks; the after-resize-pane chain above is reset the same way.)
-  tmux set-hook -g pane-focus-in  "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id}\"'"
-  tmux set-hook -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id}\"'"
+  tmux set-hook -g pane-focus-in  "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id} #{window_id}\"'"
+  tmux set-hook -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id} #{window_id}\"'"
 fi
 
 # Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.

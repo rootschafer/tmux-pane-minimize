@@ -401,6 +401,45 @@ part_resize_window() {
   assert_live "p9 after resize + repin"
 }
 
+# --- Part X: exotic setups (zoom, single pane, base-index, deep nesting) ----
+part_exotic() {
+  local act top p
+  # ZOOM: minimizing a background pane must NOT kick you out of zoom; minimizing the
+  # zoomed pane itself SHOULD unzoom.
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40; T split-window -v -t 0; T split-window -v -t 0
+  act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  T resize-pane -Z -t "$act"
+  bash "$ENGINE" toggle "$top"
+  if [ "$(T display-message -p '#{window_zoomed_flag}')" = 1 ]; then ok "pX zoom preserved minimizing a background pane"; else bad "pX lost zoom on background minimize"; fi
+  bash "$ENGINE" toggle "$top"
+  T resize-pane -Z -t "$act"
+  bash "$ENGINE" toggle "$act"
+  if [ "$(T display-message -p '#{window_zoomed_flag}')" = 0 ]; then ok "pX unzoomed minimizing the zoomed pane"; else bad "pX stayed zoomed minimizing the zoomed pane"; fi
+  assert_live "pX after zoom cases"
+
+  # SINGLE-PANE window: toggling the only pane must produce a valid (no-op-ish) layout.
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  bash "$ENGINE" toggle "$(T list-panes -F '#{pane_id}')"
+  assert_live "pX single-pane toggle valid"
+
+  # base-index / pane-base-index non-zero (resurrect keying + general).
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40 \; set -g base-index 1 \; set -g pane-base-index 1
+  T split-window -v; T split-window -v
+  bash "$ENGINE" toggle "$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')"
+  assert_live "pX base-index toggle valid"
+
+  # DEEP NEST / many panes.
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 200 -y 60
+  T split-window -h; T split-window -v; T split-window -h; T split-window -v; T split-window -h
+  for p in $(T list-panes -F '#{pane_id}' | head -4); do bash "$ENGINE" toggle "$p"; done
+  assert_live "pX deep-nest minimize valid"
+}
+
 # Locate a tmux-resurrect install (env override, common plugin dirs, or the nix store).
 find_resurrect() {
   local d
@@ -470,6 +509,7 @@ main() {
   part_dashboard
   part_peek
   part_resize_window
+  part_exotic
   part_resurrect
   part_resurrect_e2e
   summary "live_sequences"

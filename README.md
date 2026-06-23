@@ -111,7 +111,7 @@ persisted.)
 ```tmux
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
 set -g @minimize-height '3'         # minimized height in rows
-set -g @minimize-width  '15'        # minimized width in columns (narrow column)
+set -g @minimize-width  '30'        # minimized width in columns (narrow column)
 set -g @minimize-peek 'on'          # 'off' to disable peek-on-focus
 set -g @minimize-marker 'off'       # 'on' to show a state marker on minimized panes
 set -g @minimize-menu 'off'         # 'on' to add Minimize/Un-Minimize to the
@@ -186,9 +186,13 @@ height within each vertical split (proportionally), recomputes tmux's layout
 checksum, and applies it atomically with `select-layout`. A pane that sits in a
 horizontal (side-by-side) split collapses its whole row, since panes in a row share
 their height. Additionally, when **every** pane within a vertical-split group is
-minimized, that whole group is narrowed to `@minimize-width` columns (default 15)
+minimized, that whole group is narrowed to `@minimize-width` columns (default 30)
 and its horizontal neighbour widens to fill — restoring any pane in the group
 widens it back.
+
+If the window is **zoomed**, the plugin preserves the zoom across its own layout
+changes — so a terminal resize (which repins minimized panes) or minimizing a background
+pane won't kick you out of zoom. Minimizing the zoomed pane itself does exit zoom.
 
 State is kept in per-pane options: `@minimize_active` (is it minimized),
 `@minimize_saved` / `@minimize_saved_w` (pre-minimize height / pre-narrow width),
