@@ -26,6 +26,7 @@ declare -a RC_SZ RC_FLEX RC_CID   # reconcile scratch (transient; copied to loca
 RC_N=0; RC_AVAIL=0
 MINSET=" "          # " 1 4 7 " minimized pane numbers
 SAVEDW=" "          # " 1:80 4:80 " pane-number:saved-width (pre-narrow widths)
+MINH=" "            # " 1:5 4:8 " pane-number:custom minimized height (else global MIN_H)
 WPANE=""; WVAL=0    # height restore weight override
 BORDER_POS=off
 RINT=0; RET=0
@@ -35,9 +36,10 @@ RINT=0; RET=0
 # can run at once. The old single global @minimize_guard was a check-then-set with a
 # TOCTOU window, so concurrent peekin/peekout could both read guard=0 and apply
 # conflicting layouts (verified: 47 overlapping applies under a focus ping-pong).
-# An mkdir lock actually serializes them. A stale lock from a killed holder is
-# reclaimed via its recorded PID; a safety valve proceeds after ~6s so a wedged lock
-# can never hang a keystroke.
+# An mkdir lock actually serializes them. A stale lock from a *dead* holder is
+# reclaimed immediately via its recorded PID; a last-resort safety valve proceeds
+# anyway after ~20s so an alive-but-wedged holder can never hang a keystroke forever
+# (reconcile keeps even an unlucky concurrent apply well-formed regardless).
 LOCKDIR=""
 _lock() {
   local key d holder n=0
@@ -46,9 +48,9 @@ _lock() {
   while ! mkdir "$d" 2>/dev/null; do
     holder=$(cat "$d/pid" 2>/dev/null || true)
     if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      rm -f "$d/pid" 2>/dev/null; rmdir "$d" 2>/dev/null; continue   # stale holder: reclaim
+      rm -f "$d/pid" 2>/dev/null; rmdir "$d" 2>/dev/null; continue   # dead holder: reclaim
     fi
-    n=$((n + 1)); [ "$n" -ge 300 ] && break                          # ~6s safety valve
+    n=$((n + 1)); [ "$n" -ge 1000 ] && break                         # ~20s last-resort valve
     sleep 0.02
   done
   printf '%s' "$$" > "$d/pid" 2>/dev/null || true
@@ -114,6 +116,19 @@ _savedw_of() {
   case "${NT[$id]}" in
     leaf) n=${NP[$id]}; case "$SAVEDW" in *" $n:"*) tmp="${SAVEDW#* $n:}"; RET="${tmp%% *}";; *) RET="";; esac ;;
     *)    for child in ${NC[$id]}; do _savedw_of "$child"; [ -n "$RET" ] && return; done; RET="" ;;
+  esac
+}
+
+# _minh_of: the minimized HEIGHT to pin node $1 at -> RET. A leaf with a per-pane
+# custom height (@minimize_minh, carried in the MINH map) uses it; everything else
+# (incl. non-leaf minimized blocks) falls back to the global MIN_H.
+_minh_of() {
+  local id=$1 n tmp
+  RET=$MIN_H
+  [ "${NT[$id]}" = "leaf" ] || return
+  n=${NP[$id]}
+  case "$MINH" in
+    *" $n:"*) tmp="${MINH#* $n:}"; tmp="${tmp%% *}"; case "$tmp" in ''|*[!0-9]*) ;; *) RET=$tmp ;; esac ;;
   esac
 }
 
@@ -224,7 +239,7 @@ recompute() {
        done ;;
     v) # distribute HEIGHT; every child spans full width W at column X.
        local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
-       local rcount rtgt rfix isr first lastp cap rpresent fl
+       local rcount rtgt rfix isr first lastp cap rpresent fl eb
        local -a vSZ vCID vOT vOB
        set -- $kids; n=$#
        avail=$(( H - (n - 1) ))
@@ -241,7 +256,7 @@ recompute() {
          first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
          wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
          if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; fixmin=$(( fixmin + MIN_H + RET ))
+           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; fixmin=$(( fixmin + RET + eb ))
          elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
            rpresent=1   # the restore pane is a direct child of THIS vertical node
          else rcount=$(( rcount + 1 )); fi
@@ -280,7 +295,7 @@ recompute() {
          wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
          isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
          if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; hc=$(( MIN_H + RET )); fl=0
+           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; hc=$(( RET + eb )); fl=0
          elif [ "$isr" = 1 ]; then hc=$rtgt; fl=0
          elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1; fl=1
          else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
@@ -316,7 +331,7 @@ checksum() { local s="$1" cs=0 i ch code
   printf '%04x' "$cs"; }
 
 transform() {
-  local layout="$1"; MINSET="$2"; SAVEDW="${3:- }"; WPANE="${4:-}"; WVAL="${5:-0}"
+  local layout="$1"; MINSET="$2"; SAVEDW="${3:- }"; WPANE="${4:-}"; WVAL="${5:-0}"; MINH="${6:- }"
   LS="${layout#*,}"; POS=0; NN=0; NT=(); NW=(); NH=(); NX=(); NY=(); NP=(); NC=(); WM=(); FM=()
   parse_cell
   recompute 0 "${NX[0]}" "${NY[0]}" "${NW[0]}" "${NH[0]}" 1 1
@@ -325,13 +340,14 @@ transform() {
 }
 
 apply() {
-  local win="$1" wp="${2:-}" wv="${3:-0}" layout minset savedw new
+  local win="$1" wp="${2:-}" wv="${3:-0}" layout minset savedw minh new
   BORDER_POS=$(tmux show-options -gqv pane-border-status 2>/dev/null || true)
   case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
   layout=$(tmux display-message -p -t "$win" '#{window_layout}')
   minset=" $(tmux list-panes -t "$win" -F '#{?@minimize_active,#{?@minimize_peek,,#{pane_id}},}' | tr -d '%' | tr '\n' ' ')"
   savedw=" $(tmux list-panes -t "$win" -F '#{?@minimize_saved_w,#{pane_id}:#{@minimize_saved_w},}' | tr -d '%' | tr '\n' ' ')"
-  new=$(transform "$layout" "$minset" "$savedw" "$wp" "$wv")
+  minh=" $(tmux list-panes -t "$win" -F '#{?@minimize_minh,#{pane_id}:#{@minimize_minh},}' | tr -d '%' | tr '\n' ' ')"
+  new=$(transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh")
   tmux select-layout -t "$win" "$new"
 }
 
@@ -344,6 +360,7 @@ toggle_pane() {
   if [ "$(tmux display-message -p -t "$pane" '#{?@minimize_active,1,0}')" = 1 ]; then
     tmux set-option -t "$pane" -p @minimize_active 0
     tmux set-option -t "$pane" -pu @minimize_peek
+    tmux set-option -t "$pane" -pu @minimize_minh   # custom min height is per-minimize-session
     saved=$(tmux display-message -p -t "$pane" '#{@minimize_saved}'); case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
     apply "$win" "$num" "$saved"
   else
@@ -392,10 +409,70 @@ peekout() {
   _unlock
 }
 
+# dragend: handle a mouse border-drag release for a whole window. For each pane:
+#  - peeking pane resized        -> remember the new height as its saved/peek height
+#  - NON-active minimized pane    -> that dragged height becomes its custom minimized
+#    height (@minimize_minh); does NOT un-minimize it.
+# We compare against the pane's current effective min height with a 1-row tolerance so
+# the border-status edge nibble and untouched panes don't trigger a spurious update.
+dragend() {
+  local win="$1" id a h p act mh cur d need=0
+  _lock "$win"
+  while read -r id a h p act mh; do
+    if [ "$a" = 1 ] && [ "$p" = 1 ]; then
+      tmux set-option -t "$id" -p @minimize_saved "$h"
+    elif [ "$a" = 1 ] && [ "$p" != 1 ] && [ "$act" != 1 ]; then
+      case "$mh" in ''|*[!0-9]*) cur=$MIN_H ;; *) cur=$mh ;; esac
+      d=$(( h - cur )); [ "$d" -lt 0 ] && d=$(( -d ))
+      if [ "$d" -gt 1 ]; then tmux set-option -t "$id" -p @minimize_minh "$h"; need=1; fi
+    fi
+  done <<EOF
+$(tmux list-panes -t "$win" -F '#{pane_id} #{?@minimize_active,1,0} #{pane_height} #{?@minimize_peek,1,0} #{pane_active} #{@minimize_minh}')
+EOF
+  if [ "$need" = 1 ]; then tmux set-option -g @minimize_guard 1; apply "$win"; tmux set-option -gu @minimize_guard; fi
+  _unlock
+}
+
+# Explicit per-pane minimized-height control (keyboard). set/adjust/reset @minimize_minh
+# on a pane and re-pin so it takes effect immediately. Clamped >=1.
+_apply_minh() {  # $1 pane  $2 win
+  tmux set-option -g @minimize_guard 1; apply "$2"; tmux set-option -gu @minimize_guard
+}
+set_minh() {
+  local pane="$1" h="$2" win
+  case "$h" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$h" -lt 1 ] && h=1
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  _lock "$win"
+  tmux set-option -t "$pane" -p @minimize_minh "$h"
+  _apply_minh "$pane" "$win"
+  _unlock
+}
+adjust_minh() {
+  local pane="$1" delta="$2" cur new
+  cur=$(tmux show-options -t "$pane" -pqv @minimize_minh 2>/dev/null || true)
+  case "$cur" in ''|*[!0-9]*) cur=$MIN_H ;; esac
+  new=$(( cur + delta )); [ "$new" -lt 1 ] && new=1
+  set_minh "$pane" "$new"
+}
+reset_minh() {
+  local pane="$1" win
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  _lock "$win"
+  tmux set-option -t "$pane" -pu @minimize_minh
+  _apply_minh "$pane" "$win"
+  _unlock
+}
+
 case "${1:-}" in
   toggle)    toggle_pane "$2" ;;
   peekin)    peekin "$2" ;;
   peekout)   peekout "$2" ;;
+  dragend)   dragend "$2" ;;
+  minh-set)    set_minh "$2" "$3" ;;
+  minh-grow)   adjust_minh "$2" "$3" ;;
+  minh-shrink) adjust_minh "$2" "-$3" ;;
+  minh-reset)  reset_minh "$2" ;;
   repin)
     _lock "$2"; tmux set-option -g @minimize_guard 1; apply "$2"; tmux set-option -gu @minimize_guard; _unlock ;;
   selftest)
@@ -406,5 +483,7 @@ case "${1:-}" in
     echo "full stack min (96,98,97 all min -> right column narrows to MIN_W=$MIN_W, 95 widens):"
     echo "  $(transform "$L" ' 96 98 97 ')"
     echo "peek: 96 min, 98 peeking (excluded from MINSET) -> 98 expands among flex panes:"
-    echo "  $(transform "$L" ' 96 ')" ;;
+    echo "  $(transform "$L" ' 96 ')"
+    echo "per-pane height: 96,97 min, 96 pinned to custom @minimize_minh=10 (97 -> MIN_H):"
+    echo "  $(transform "$L" ' 96 97 ' ' ' '' 0 ' 96:10 ')" ;;
 esac

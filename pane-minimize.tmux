@@ -23,13 +23,28 @@ GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => for
 # Toggle key (prefix table).
 tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
 
-# Forget minimized state when the user resizes a pane themselves.
+# Optional keys to set the focused pane's custom minimized height (opt-in — only bound
+# when you set the option). grow/shrink step by @minimize-minh-step rows; reset clears
+# back to the global @minimize-height. The custom height lasts until the pane is
+# un-minimized (then it resets). You can also set it by mouse-dragging a non-active
+# minimized pane's border. Suggested: set @minimize-minh-grow-key '+' etc.
+MINH_STEP="$(opt @minimize-minh-step '1')"
+GROW_KEY="$(opt @minimize-minh-grow-key '')"
+SHRINK_KEY="$(opt @minimize-minh-shrink-key '')"
+RESET_KEY="$(opt @minimize-minh-reset-key '')"
+[ -n "$GROW_KEY" ]   && tmux bind-key "$GROW_KEY"   run-shell "$SCRIPT minh-grow #{pane_id} $MINH_STEP"
+[ -n "$SHRINK_KEY" ] && tmux bind-key "$SHRINK_KEY" run-shell "$SCRIPT minh-shrink #{pane_id} $MINH_STEP"
+[ -n "$RESET_KEY" ]  && tmux bind-key "$RESET_KEY"  run-shell "$SCRIPT minh-reset #{pane_id}"
+
+# Forget minimized state when the user resizes the ACTIVE pane taller themselves.
 #  - keyboard / resize-pane command fires after-resize-pane
 #  - @minimize_guard skips the plugin's own resizes
-#  - only clear when the pane is clearly taller than minimized (tolerates the
-#    1-row border-status nibble on an edge pane)
+#  - gated on #{pane_active}: only the focused pane un-minimizes this way, so resizing
+#    a NON-active minimized pane (mouse drag) sets its minimized height instead (dragend)
+#  - only clear when clearly taller than minimized (tolerates the 1-row border nibble)
+#  - also drop any per-pane custom minimized height (it's per-minimize-session)
 tmux set-hook -g after-resize-pane \
-  "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}},#{>:#{pane_height},$GROW}}}' 'set-option -p @minimize_active 0'"
+  "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{pane_active},#{&&:#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}},#{>:#{pane_height},$GROW}}}}' 'set-option -p @minimize_active 0 ; set-option -pu @minimize_minh'"
 
 # If the user resizes a pane *while it is peeked* (expanded for inspection), remember
 # the new height as its saved size so future peeks / un-minimize use it. set-option
@@ -42,11 +57,11 @@ tmux set-hook -a -g after-resize-pane \
 tmux set-hook -g after-resize-window "run-shell -b \"$SCRIPT repin #{window_id}\""
 
 # Mouse: a border drag resizes internally (no per-step hook); MouseDragEnd1Border
-# fires on release. Forget any minimized pane that was dragged clearly taller.
-# The trailing ': ok' forces exit 0 — otherwise the loop's last failed &&-test
-# would make run-shell report a non-zero exit and dump the command into the pane.
-tmux bind-key -T root MouseDragEnd1Border run-shell -b \
-  "tmux list-panes -t '#{window_id}' -F '##{pane_id} ##{?@minimize_active,1,0} ##{pane_height} ##{?@minimize_peek,1,0}' | while read id a h p; do if [ \"\$a\" = 1 ] && [ \"\$p\" = 1 ]; then tmux set-option -t \"\$id\" -p @minimize_saved \"\$h\"; elif [ \"\$a\" = 1 ] && [ \"\$h\" -gt $GROW ]; then tmux set-option -t \"\$id\" -p @minimize_active 0; fi; done; : ok"
+# fires on release. The engine's `dragend` then: saves a peeked pane's new height, and
+# turns a dragged NON-active minimized pane's new height into its custom minimized
+# height (without un-minimizing it). ': ok' forces exit 0 so run-shell never dumps a
+# non-zero exit into the pane.
+tmux bind-key -T root MouseDragEnd1Border run-shell -b "$SCRIPT dragend #{window_id} ; : ok"
 
 # Peek-on-focus: temporarily expand a minimized pane while selected. Gated on
 # @minimize-peek (default on). Requires focus-events on (already set in dotfiles).

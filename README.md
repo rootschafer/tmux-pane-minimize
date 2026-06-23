@@ -45,6 +45,15 @@ rows, default 3) and its previous size. Re-bind with `@minimize-key`.
  collapses to @minimize-width, letting its neighbour widen to fill.
 ```
 
+### Per-pane minimized height
+Different minimized panes can have different heights. Drag the border of a
+**non-active** minimized pane (one that isn't focused) and its new height becomes that
+pane's minimized height — it stays minimized rather than expanding. You can also bind
+keys (`@minimize-minh-grow-key` / `-shrink-key` / `-reset-key`) to adjust the focused
+pane's minimized height. Resizing the **active** pane still changes its peek/restored
+height, as before. A custom height lasts until the pane is un-minimized, then resets to
+the global `@minimize-height`.
+
 ## Options
 ```tmux
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
@@ -55,6 +64,13 @@ set -g @minimize-menu 'off'         # 'on' to add Minimize/Un-Minimize to the
                                     #      right-click (MouseDown3Pane) pane menu
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
 set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]'  # marker (minimized)
+
+# Per-pane minimized height (optional). Drag a NON-active minimized pane's border to
+# set its minimized height; or bind keys to set it from the keyboard:
+set -g @minimize-minh-step       '1'  # rows per grow/shrink press
+set -g @minimize-minh-grow-key   ''   # e.g. '+'  grow focused pane's minimized height
+set -g @minimize-minh-shrink-key ''   # e.g. '-'  shrink it
+set -g @minimize-minh-reset-key  ''   # e.g. '0'  reset it to @minimize-height
 ```
 The default marker icon (`󰘖`) is a Nerd Font glyph; override the format with any
 glyph your font has (see the fallback note below).

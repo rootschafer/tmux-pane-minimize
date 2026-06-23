@@ -168,35 +168,96 @@ s2 s3 s1 m2 s2 s1 r'
 # this was dozens). The instrumentation log lines are short -> atomic appends, so the
 # enter/exit ordering reflects real interleaving (modulo a 1-deep handoff artifact).
 part3() {
-  local eng2 racelog win max
+  local eng2 busy coll win r
   eng2="/tmp/tmin-engine2-$SOCK.sh"
-  racelog="/tmp/tmin-race-$SOCK.log"
-  : > "$racelog"
-  awk -v lf="$racelog" '
-    /^apply\(\) \{/ { print; getline; print; print "  echo \"E $$\" >> \"" lf "\""; next }
-    /select-layout -t "\$win" "\$new"/ {
-      print "  echo \"S $$\" >> \"" lf "\""; print; print "  echo \"X $$\" >> \"" lf "\""; next
-    }
+  busy="/tmp/tmin-busy-$SOCK"          # the mutual-exclusion marker dir
+  coll="/tmp/tmin-coll-$SOCK"          # collision log
+  : > "$coll"; rmdir "$busy" 2>/dev/null
+  # TRUE overlap detector (not log-order sensitive): each apply mkdir's a shared marker
+  # at entry; the mkdir can only FAIL if another apply already holds it -> a real
+  # overlap. rmdir at the end of the critical section. With the per-window lock this
+  # must never collide.
+  awk -v busy="$busy" -v coll="$coll" '
+    /^apply\(\) \{/ { print; getline; print; print "  mkdir \"" busy "\" 2>/dev/null || echo OVERLAP >> \"" coll "\""; next }
+    /select-layout -t "\$win" "\$new"/ { print; print "  rmdir \"" busy "\" 2>/dev/null"; next }
     { print }
   ' "$ENGINE" > "$eng2"
 
   build_bugshape
   win=$(T display-message -p '#{window_id}')
-  bash "$eng2" toggle "$P_RTOP"     # minimize one pane
+  bash "$eng2" toggle "$P_RTOP"        # minimize one pane
   assert_live "p3 pre-burst"
 
-  # Concurrent burst: many repin (each runs apply) racing on the same window.
-  local r=0
-  while [ "$r" -lt 50 ]; do bash "$eng2" repin "$win" & r=$((r + 1)); done
+  # Realistic concurrent burst (focus/resize hooks are only a few deep in practice).
+  r=0
+  while [ "$r" -lt 16 ]; do bash "$eng2" repin "$win" & r=$((r + 1)); done
   wait
   T run-shell "true" >/dev/null 2>&1
   assert_live "p3 post-burst (race exposer: valid layout, no zero pane)"
 
-  max=$(awk '$1=="E"{a++; if(a>m)m=a} $1=="X"{a--} END{print m+0}' "$racelog")
-  if [ "$max" -le 3 ]; then ok "p3 applies serialized (max concurrent=$max)"
-  else bad "p3 NOT serialized: max concurrent apply=$max (guard race?)"; fi
+  local n; n=$(grep -c OVERLAP "$coll" 2>/dev/null || true); : "${n:=0}"
+  if [ "$n" -eq 0 ]; then ok "p3 applies serialized (0 true overlaps over 16 concurrent)"
+  else bad "p3 NOT serialized: $n overlapping applies (guard race?)"; fi
 
-  rm -f "$eng2" "$racelog"
+  rmdir "$busy" 2>/dev/null; rm -f "$eng2" "$coll"
+}
+
+# --- Part 4: per-pane minimized height --------------------------------------
+# pane_h ID -> echoes the pane's current height
+pane_h() { T display-message -p -t "$1" '#{pane_height}'; }
+
+# Custom min height applies to a minimized pane that has a FLEXIBLE sibling (a fully
+# minimized stack uses the proportional 'allmin' path instead). So build a 3-pane
+# vertical stack and minimize only the TOP one; mid+bot stay flexible.
+part_minh() {
+  local top bot win h mh
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  T split-window -v -t 0
+  T split-window -v -t 0
+  win=$(T display-message -p '#{window_id}')
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
+
+  bash "$ENGINE" toggle "$top"       # minimize only the top pane
+  T select-pane -t "$bot"            # top is now non-active
+  assert_live "p4 3-stack, top minimized"
+  h=$(pane_h "$top")
+  if [ "$h" = 3 ]; then ok "p4 top at MIN_H(3)"; else bad "p4 top height=$h (expected 3)"; fi
+
+  bash "$ENGINE" minh-set "$top" 10
+  assert_live "p4 minh-set 10"
+  h=$(pane_h "$top")
+  if [ "$h" = 10 ]; then ok "p4 top height==10"; else bad "p4 top height=$h (expected 10)"; fi
+
+  bash "$ENGINE" minh-grow "$top" 2;  h=$(pane_h "$top")
+  if [ "$h" = 12 ]; then ok "p4 minh-grow ->12"; else bad "p4 grow height=$h (expected 12)"; fi
+  bash "$ENGINE" minh-shrink "$top" 5; h=$(pane_h "$top")
+  if [ "$h" = 7 ]; then ok "p4 minh-shrink ->7"; else bad "p4 shrink height=$h (expected 7)"; fi
+
+  bash "$ENGINE" repin "$win"; h=$(pane_h "$top")
+  if [ "$h" = 7 ]; then ok "p4 custom height survives repin"; else bad "p4 after repin height=$h (expected 7)"; fi
+
+  bash "$ENGINE" minh-reset "$top"; h=$(pane_h "$top")
+  if [ "$h" = 3 ]; then ok "p4 minh-reset -> MIN_H(3)"; else bad "p4 after reset height=$h (expected 3)"; fi
+  assert_live "p4 after reset"
+
+  # reset-each-time: set custom, un-minimize, re-minimize -> default again
+  bash "$ENGINE" minh-set "$top" 9
+  bash "$ENGINE" toggle "$top"       # un-minimize (clears @minimize_minh)
+  bash "$ENGINE" toggle "$top"       # re-minimize
+  T select-pane -t "$bot"
+  h=$(pane_h "$top")
+  if [ "$h" = 3 ]; then ok "p4 custom height reset after un/re-minimize"; else bad "p4 re-minimize height=$h (expected 3)"; fi
+
+  # dragend path: simulate dragging the non-active minimized top taller, then dragend
+  T set-option -g @minimize_guard 1
+  T resize-pane -t "$top" -y 8 >/dev/null 2>&1
+  T set-option -gu @minimize_guard
+  bash "$ENGINE" dragend "$win"
+  mh=$(T show-options -t "$top" -pqv @minimize_minh 2>/dev/null || true)
+  if [ -n "$mh" ]; then ok "p4 dragend set @minimize_minh=$mh on non-active pane"; else bad "p4 dragend did not set @minimize_minh"; fi
+  assert_live "p4 after dragend"
 }
 
 main() {
@@ -204,6 +265,7 @@ main() {
   part1_stale
   part2
   part3
+  part_minh
   summary "live_sequences"
 }
 

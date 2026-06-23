@@ -39,10 +39,10 @@ MIN_W=15
 
 WVALS="0 1 3 9 1000"   # degenerate, min, MIN_H, mid, overflow(>any window H)
 
-# check_one DESC LAYOUT MINSET SAVEDW WPANE WVAL
+# check_one DESC LAYOUT MINSET SAVEDW WPANE WVAL [MINH]
 check_one() {
-  local desc="$1" layout="$2" minset="$3" savedw="$4" wpane="$5" wval="$6" out
-  out=$(transform "$layout" "$minset" "$savedw" "$wpane" "$wval")
+  local desc="$1" layout="$2" minset="$3" savedw="$4" wpane="$5" wval="$6" minh="${7:- }" out
+  out=$(transform "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh")
   if check_layout "$out"; then
     ok "$desc"
   else
@@ -50,7 +50,7 @@ check_one() {
     # shellcheck disable=SC2154
     bad "$desc :: $AL_ERR
       in  : $layout
-      min : [$minset] savedw=[$savedw] wpane=[$wpane] wval=$wval
+      min : [$minset] savedw=[$savedw] wpane=[$wpane] wval=$wval minh=[$minh]
       out : $out"
   fi
 }
@@ -59,7 +59,7 @@ check_one() {
 # Bash 3.2: no associative arrays; iterate bitmask 0..2^k-1 (k<=4 -> <=16).
 run_subsets() {
   local layout="$1" leaves="$2"
-  local arr k mask i sub bit savedw wpane lo wv
+  local arr k mask i sub bit savedw wpane lo wv mh
   # shellcheck disable=SC2206
   arr=($leaves)
   k=${#arr[@]}
@@ -74,6 +74,16 @@ run_subsets() {
 
     # 1) plain minimize, no restore pane
     check_one "subset[$sub]" "$layout" "$sub" " " "" 0
+
+    # 1b) per-pane custom minimized height: give each minimized pane in the subset a
+    #     custom @minimize_minh over extremes {1, MIN_H, mid, overflow}. Bounded so it
+    #     doesn't blow up runtime; reconcile must keep every result valid.
+    for lo in "${arr[@]}"; do
+      case " $sub " in *" $lo "*) ;; *) continue ;; esac   # only minimized panes
+      for mh in 1 3 30 999; do
+        check_one "subset[$sub] minh=$lo:$mh" "$layout" "$sub" " " "" 0 " ${lo}:${mh} "
+      done
+    done
 
     # 2) un-minimize/peek: every leaf as WPANE x every WVAL extreme.
     #    Also exercise a SAVEDW entry (saved pre-narrow width) for that pane.
