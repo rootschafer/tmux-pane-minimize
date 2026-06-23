@@ -61,10 +61,11 @@ _contrast_fg() {
   [ "$lum" -gt 140 ] && printf 'colour16' || printf 'colour231'
 }
 # Default glyphs are UTF-8 byte escapes (printf '\xHH') so no multi-byte chars live in the
-# source (bash-3.2 safe; no $'\u'). Inactive icon = nf-md-unfold_less_horizontal (U+F054E);
-# the active/peeked pane shows nf-md-unfold_more_horizontal (U+F054F).
-MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xf3\xb0\x95\x8e')")"
-MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xf3\xb0\x95\x8f')")"
+# source (bash-3.2 safe; no $'\u'). The marker is two FontAwesome chevrons with a space:
+# inactive/minimized points INWARD ">  <" (collapsed); active/peeked points OUTWARD
+# "<  >" (expanded). chevron-left = U+F053 (\xef\x81\x93), chevron-right = U+F054 (\xef\x81\x94).
+MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xef\x81\x94 \xef\x81\x93')")"
+MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xef\x81\x93 \xef\x81\x94')")"
 MARKER_WIDTH="$(opt @minimize-marker-width '5')"           # 3 or 5
 MARKER_ICON_COLOR="$(opt @minimize-marker-icon-color 'auto')"   # 'auto' = black/white by bg luminance
 MARKER_BG="$(opt @minimize-marker-bg "$(_border_fg pane-border-style)")"
