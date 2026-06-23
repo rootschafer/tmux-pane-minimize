@@ -25,6 +25,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tmux
 
+      - name: Check out tmux-resurrect (for the end-to-end resurrect test)
+        uses: actions/checkout@v4
+        with:
+          repository: tmux-plugins/tmux-resurrect
+          path: .ci/tmux-resurrect
+
       - name: Versions
         run: |
           /bin/bash --version | head -1
@@ -41,4 +47,6 @@ jobs:
         run: shellcheck -s bash -S warning scripts/tmux-min.sh pane-minimize.tmux tests/*.sh
 
       - name: Offline property suite + live suite
+        env:
+          RESURRECT_PATH: ${{ github.workspace }}/.ci/tmux-resurrect
         run: /bin/bash tests/run.sh

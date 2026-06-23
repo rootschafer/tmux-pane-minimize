@@ -5,10 +5,20 @@ Minimized panes stay pinned at their small size when you minimize/restore/resize
 **other** panes, and it works for **any layout, however deeply nested** (it rewrites
 the window layout tree directly rather than nudging panes with `resize-pane`).
 
-A minimized pane is forgotten automatically when *you* resize it — by toggle key,
-by dragging its border, or with the resize keys — but **not** when the terminal
-window itself is resized. You can also **click** the on-border marker to toggle a
-pane (restore it, or minimize it when the optional minimize button is enabled).
+Features:
+
+- **Toggle** any pane minimized/restored (`prefix + Ctrl-t` by default).
+- **Peek on focus** — selecting a minimized pane temporarily expands it; moving away
+  re-collapses it.
+- **Per-pane minimized height** — drag a minimized pane's border, or use keys, to give
+  it its own height.
+- **Dashboard view** — one key minimizes everything except the active pane; press again
+  to restore.
+- **Survives [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect)** — minimized
+  state is persisted across a save/restore.
+
+A minimized pane is forgotten automatically when *you* resize it (toggle key, border
+drag, or resize keys) — but **not** when the terminal window itself is resized.
 
 ![status: works on tmux 3.0+](https://img.shields.io/badge/tmux-3.0%2B-green)
 
@@ -27,6 +37,25 @@ Then press `prefix + I` to fetch.
 run-shell ~/clone/of/tmux-pane-minimize/pane-minimize.tmux
 ```
 
+### Nix (flake)
+Add the repo as a flake input and run its entry point from your tmux config:
+```nix
+# flake.nix
+inputs.tmux-pane-minimize = {
+  url = "github:rootschafer/tmux-pane-minimize";
+  flake = false;
+};
+```
+```nix
+# wherever you build your tmux config (Home Manager / nix-darwin / NixOS)
+programs.tmux.extraConfig = ''
+  run-shell ${inputs.tmux-pane-minimize}/pane-minimize.tmux
+  set -g @minimize-height 3
+  # ... other @minimize-* options ...
+'';
+```
+Pin/update with `nix flake update tmux-pane-minimize`.
+
 ## Usage
 `prefix` + `Ctrl-t` toggles the active pane between minimized (`@minimize-height`
 rows, default 3) and its previous size. Re-bind with `@minimize-key`.
@@ -44,6 +73,12 @@ rows, default 3) and its previous size. Re-bind with `@minimize-key`.
  minimize *every* pane in a vertical stack and the whole column
  collapses to @minimize-width, letting its neighbour widen to fill.
 ```
+
+### Peek on focus
+Selecting a minimized pane temporarily expands it to its saved height so you can glance
+at it; moving focus away re-collapses it. On by default — set `@minimize-peek 'off'` to
+disable. (Requires `focus-events on`, which most configs already set.) Resizing a pane
+while it's peeked updates its saved height.
 
 ### Per-pane minimized height
 Different minimized panes can have different heights. Drag the border of a
@@ -77,6 +112,7 @@ persisted.)
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
 set -g @minimize-height '3'         # minimized height in rows
 set -g @minimize-width  '15'        # minimized width in columns (narrow column)
+set -g @minimize-peek 'on'          # 'off' to disable peek-on-focus
 set -g @minimize-marker 'off'       # 'on' to show a state marker on minimized panes
 set -g @minimize-menu 'off'         # 'on' to add Minimize/Un-Minimize to the
                                     #      right-click (MouseDown3Pane) pane menu
@@ -98,6 +134,19 @@ set -g @minimize-resurrect 'on'       # persist minimized state across tmux-resu
 ```
 The default marker icon (`󰘖`) is a Nerd Font glyph; override the format with any
 glyph your font has (see the fallback note below).
+
+A typical setup that turns on the optional keys:
+```tmux
+set -g @minimize-key 'C-t'              # prefix + C-t  toggle minimize
+set -g @minimize-dashboard-key 'M'      # prefix + M    minimize all but the active pane
+set -g @minimize-minh-grow-key '+'      # prefix + +    taller minimized height
+set -g @minimize-minh-shrink-key '-'    # prefix + -    shorter
+set -g @minimize-minh-reset-key '0'     # prefix + 0    back to @minimize-height
+set -g @minimize-marker 'on'            # show the on-border state marker
+set -g mouse on                         # for the right-click menu + border-drag sizing
+```
+Only `@minimize-key` is bound by default; the grow/shrink/reset and dashboard keys are
+opt-in (empty until you set them). Resurrect persistence is on by default.
 
 ### About the marker (opt-in)
 The marker needs a pane-border status line, so enabling `@minimize-marker on`
@@ -127,8 +176,8 @@ to the exact moused pane. Clicking the border **icon** is deliberately *not* wir
 border mouse events resolve to an inconsistent neighbouring pane near column dividers
 and expose no coordinates, and a pane-content click would steal the top cell from
 child TUIs. The border icon is therefore a **state indicator**; toggle with the key
-or the menu. (A focus-based "peek" — temporarily expand a minimized pane while it's
-selected — is planned; see `PLAN.md`.)
+or the menu. (To glance at a minimized pane without toggling, just select it — see
+[Peek on focus](#peek-on-focus).)
 
 ## How it works
 On toggle, the plugin reads `#{window_layout}`, parses the layout tree, forces every
@@ -141,9 +190,14 @@ minimized, that whole group is narrowed to `@minimize-width` columns (default 15
 and its horizontal neighbour widens to fill — restoring any pane in the group
 widens it back.
 
-State is kept in per-pane options `@minimize_active`, `@minimize_saved` (pre-minimize
-height) and `@minimize_saved_w` (pre-narrow width), plus a transient global
-`@minimize_guard` used to suppress the resize hooks during the plugin's own resizes.
+State is kept in per-pane options: `@minimize_active` (is it minimized),
+`@minimize_saved` / `@minimize_saved_w` (pre-minimize height / pre-narrow width),
+`@minimize_peek` (currently peeked), `@minimize_minh` (per-pane custom height), and
+`@minimize_dashboard` (minimized by the dashboard key). A transient global
+`@minimize_guard` suppresses the resize hooks during the plugin's own resizes, and a
+per-window `mkdir` lock serialises the engine so the backgrounded focus/resize hooks
+can't apply conflicting layouts. (Note: the engine names use an underscore,
+`@minimize_active`; the user-facing **config options** use a hyphen, `@minimize-height`.)
 
 ## Requirements
 tmux ≥ 3.0 (`select-layout`, `#{window_layout}`, hooks, `MouseDragEnd1Border`,
