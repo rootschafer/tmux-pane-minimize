@@ -54,6 +54,12 @@ pane's minimized height. Resizing the **active** pane still changes its peek/res
 height, as before. A custom height lasts until the pane is un-minimized, then resets to
 the global `@minimize-height`.
 
+### Dashboard view (minimize all but active)
+Bind `@minimize-dashboard-key` to collapse every pane in the window except the active
+one into minimized strips — a quick "focus on this pane" view. Press it again to
+restore the previous layout exactly. Panes you had already minimized yourself stay
+minimized through the round trip.
+
 ## Options
 ```tmux
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
@@ -71,6 +77,8 @@ set -g @minimize-minh-step       '1'  # rows per grow/shrink press
 set -g @minimize-minh-grow-key   ''   # e.g. '+'  grow focused pane's minimized height
 set -g @minimize-minh-shrink-key ''   # e.g. '-'  shrink it
 set -g @minimize-minh-reset-key  ''   # e.g. '0'  reset it to @minimize-height
+
+set -g @minimize-dashboard-key   ''   # e.g. 'M'  minimize all panes but the active one
 ```
 The default marker icon (`󰘖`) is a Nerd Font glyph; override the format with any
 glyph your font has (see the fallback note below).

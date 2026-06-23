@@ -36,6 +36,11 @@ RESET_KEY="$(opt @minimize-minh-reset-key '')"
 [ -n "$SHRINK_KEY" ] && tmux bind-key "$SHRINK_KEY" run-shell "$SCRIPT minh-shrink #{pane_id} $MINH_STEP"
 [ -n "$RESET_KEY" ]  && tmux bind-key "$RESET_KEY"  run-shell "$SCRIPT minh-reset #{pane_id}"
 
+# Optional "dashboard" key (opt-in): minimize every pane except the active one; press
+# again to restore the previous layout. Suggested: set @minimize-dashboard-key 'M'.
+DASH_KEY="$(opt @minimize-dashboard-key '')"
+[ -n "$DASH_KEY" ] && tmux bind-key "$DASH_KEY" run-shell "$SCRIPT dashboard #{pane_id}"
+
 # Forget minimized state when the user resizes the ACTIVE pane taller themselves.
 #  - keyboard / resize-pane command fires after-resize-pane
 #  - @minimize_guard skips the plugin's own resizes

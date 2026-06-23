@@ -464,11 +464,59 @@ reset_minh() {
   _unlock
 }
 
+# dashboard: toggle a "focus" view — minimize every pane in the window EXCEPT the
+# active one, then a second invocation restores the previous layout exactly.
+#  - ENTER: save the window layout to @minimize_dashboard_layout, then minimize every
+#    pane that isn't the active one and isn't already minimized, flagging each with
+#    @minimize_dashboard so we know which ones WE minimized (user-minimized panes are
+#    left as-is and survive the round trip).
+#  - EXIT (saved layout present): clear flags on the dashboard panes and restore the
+#    saved layout verbatim, so panes return to their exact prior sizes. Falls back to a
+#    normal recompute if the saved layout no longer fits (a pane was added/closed).
+dashboard() {
+  local pane="$1" win active saved id
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  _lock "$win"
+  tmux set-option -g @minimize_guard 1
+  saved=$(tmux show-options -wqv @minimize_dashboard_layout 2>/dev/null || true)
+  if [ -n "$saved" ]; then
+    while read -r id; do
+      [ -z "$id" ] && continue
+      tmux set-option -t "$id" -p @minimize_active 0
+      tmux set-option -t "$id" -pu @minimize_peek
+      tmux set-option -t "$id" -pu @minimize_minh
+      tmux set-option -t "$id" -pu @minimize_dashboard
+    done <<EOF
+$(tmux list-panes -t "$win" -F '#{?@minimize_dashboard,#{pane_id},}')
+EOF
+    tmux set-option -wu @minimize_dashboard_layout
+    tmux select-layout -t "$win" "$saved" 2>/dev/null || apply "$win"
+  else
+    active=$(tmux display-message -p -t "$pane" '#{pane_id}')
+    tmux set-option -w @minimize_dashboard_layout "$(tmux display-message -p -t "$win" '#{window_layout}')"
+    while read -r id; do
+      [ -z "$id" ] && continue
+      [ "$id" = "$active" ] && continue
+      [ "$(tmux display-message -p -t "$id" '#{?@minimize_active,1,0}')" = 1 ] && continue
+      tmux set-option -t "$id" -p @minimize_saved   "$(tmux display-message -p -t "$id" '#{pane_height}')"
+      tmux set-option -t "$id" -p @minimize_saved_w "$(tmux display-message -p -t "$id" '#{pane_width}')"
+      tmux set-option -t "$id" -p @minimize_active 1
+      tmux set-option -t "$id" -p @minimize_dashboard 1
+    done <<EOF
+$(tmux list-panes -t "$win" -F '#{pane_id}')
+EOF
+    apply "$win"
+  fi
+  tmux set-option -gu @minimize_guard
+  _unlock
+}
+
 case "${1:-}" in
   toggle)    toggle_pane "$2" ;;
   peekin)    peekin "$2" ;;
   peekout)   peekout "$2" ;;
   dragend)   dragend "$2" ;;
+  dashboard) dashboard "$2" ;;
   minh-set)    set_minh "$2" "$3" ;;
   minh-grow)   adjust_minh "$2" "$3" ;;
   minh-shrink) adjust_minh "$2" "-$3" ;;

@@ -260,12 +260,57 @@ part_minh() {
   assert_live "p4 after dragend"
 }
 
+# --- Part 5: dashboard (minimize all but active) ----------------------------
+part_dashboard() {
+  local win act orig now nmin top bot dflag
+
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0; T split-window -v -t 0   # 4 panes
+  win=$(T display-message -p '#{window_id}')
+  act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
+  orig=$(T display-message -p '#{window_layout}')
+  assert_live "p5 initial 4 panes"
+
+  bash "$ENGINE" dashboard "$act"
+  assert_live "p5 dashboard entered"
+  nmin=$(T list-panes -F '#{@minimize_active}' | grep -c 1 || true); : "${nmin:=0}"
+  if [ "$nmin" = 3 ]; then ok "p5 3 non-active panes minimized"; else bad "p5 minimized count=$nmin (expected 3)"; fi
+
+  bash "$ENGINE" dashboard "$act"
+  now=$(T display-message -p '#{window_layout}')
+  if [ "$orig" = "$now" ]; then ok "p5 exact layout restore on exit"; else bad "p5 not restored:
+    orig=$orig
+    now =$now"; fi
+  nmin=$(T list-panes -F '#{@minimize_active}' | grep -c 1 || true); : "${nmin:=0}"
+  if [ "$nmin" = 0 ]; then ok "p5 all flags cleared on exit"; else bad "p5 $nmin panes still minimized after exit"; fi
+  assert_live "p5 dashboard exited"
+
+  # A pane the user minimized BEFORE entering dashboard must survive the round trip.
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0                          # 3 panes
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"           # user-minimize the top pane
+  T select-pane -t "$bot"
+  bash "$ENGINE" dashboard "$bot"        # enter dashboard from bottom
+  dflag=$(T show-options -t "$top" -pqv @minimize_dashboard 2>/dev/null || true)
+  if [ -z "$dflag" ]; then ok "p5 pre-minimized pane not dashboard-flagged"; else bad "p5 pre-min pane wrongly flagged"; fi
+  bash "$ENGINE" dashboard "$bot"        # exit dashboard
+  if [ "$(T display-message -p -t "$top" '#{?@minimize_active,1,0}')" = 1 ]; then
+    ok "p5 pre-minimized pane still minimized after exit"
+  else bad "p5 pre-minimized pane lost its minimized state"; fi
+  assert_live "p5 pre-minimized preserved"
+}
+
 main() {
   part1
   part1_stale
   part2
   part3
   part_minh
+  part_dashboard
   summary "live_sequences"
 }
 
