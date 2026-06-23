@@ -42,21 +42,28 @@ RINT=0; RET=0
 # (reconcile keeps even an unlucky concurrent apply well-formed regardless).
 LOCKDIR=""
 _lock() {
-  local key d holder n=0
+  local key d holder tmp n=0
   key=$(printf '%s' "${1:-global}" | tr -c 'A-Za-z0-9' '_')
   d="${TMPDIR:-/tmp}/tmux-min-$key.lock"
   while ! mkdir "$d" 2>/dev/null; do
     holder=$(cat "$d/pid" 2>/dev/null || true)
     if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      rm -f "$d/pid" 2>/dev/null; rmdir "$d" 2>/dev/null; continue   # dead holder: reclaim
+      # dead holder: capture the stale dir by ATOMIC rename (only one racer wins) then
+      # drop it. rename — not a bare rmdir — so we can't delete a dir another racer
+      # has just freshly re-acquired.
+      tmp="$d.stale.$$.$n"
+      mv "$d" "$tmp" 2>/dev/null && rm -rf "$tmp" 2>/dev/null
+      continue
     fi
     n=$((n + 1)); [ "$n" -ge 1000 ] && break                         # ~20s last-resort valve
     sleep 0.02
   done
-  printf '%s' "$$" > "$d/pid" 2>/dev/null || true
+  # Publish our PID ATOMICALLY (write temp + rename) so a concurrent reader can never
+  # see a partial/garbage value and mistake a live holder for a dead one.
+  printf '%s' "$$" > "$d/.pid.$$" 2>/dev/null && mv -f "$d/.pid.$$" "$d/pid" 2>/dev/null
   LOCKDIR="$d"
 }
-_unlock() { [ -n "${LOCKDIR:-}" ] && { rm -f "$LOCKDIR/pid" 2>/dev/null; rmdir "$LOCKDIR" 2>/dev/null; }; LOCKDIR=""; }
+_unlock() { [ -n "${LOCKDIR:-}" ] && rm -rf "$LOCKDIR" 2>/dev/null; LOCKDIR=""; }
 trap _unlock EXIT
 
 _read_int() { RINT=""; local ch
@@ -511,12 +518,55 @@ EOF
   _unlock
 }
 
+# ---- tmux-resurrect persistence ----
+# resurrect saves/restores #{window_layout}, so the minimized GEOMETRY already survives
+# a restart — but the per-pane @minimize_* options (which tell the plugin a pane IS
+# minimized, and its pre-minimize size) are user options resurrect doesn't touch.
+# save-state/restore-state persist them in a sidecar keyed by session:window.pane_index
+# (the same stable identity resurrect uses), wired via resurrect's post-save/restore
+# hooks. Transient peek + dashboard grouping are intentionally not persisted.
+_state_file() {
+  local d
+  d=$(tmux show-option -gqv @resurrect-dir 2>/dev/null || true)
+  [ -z "$d" ] && d="$HOME/.tmux/resurrect"
+  printf '%s/tmux-pane-minimize.state' "$d"
+}
+save_state() {
+  local f="${1:-}"
+  [ -z "$f" ] && f=$(_state_file)
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  # one TAB-separated line per minimized pane: sess win pane saved saved_w minh
+  tmux list-panes -a -F '#{?@minimize_active,#{session_name}	#{window_index}	#{pane_index}	#{@minimize_saved}	#{@minimize_saved_w}	#{@minimize_minh},}' \
+    | grep -v '^$' > "$f" 2>/dev/null || true
+}
+restore_state() {
+  local f="${1:-}" sess win pane saved savedw minh tgt w wins=""
+  [ -z "$f" ] && f=$(_state_file)
+  [ -f "$f" ] || return 0
+  while IFS='	' read -r sess win pane saved savedw minh; do
+    [ -z "$sess" ] && continue
+    tgt="${sess}:${win}.${pane}"
+    tmux display-message -p -t "$tgt" '#{pane_id}' >/dev/null 2>&1 || continue
+    tmux set-option -t "$tgt" -p @minimize_active 1
+    case "$saved"  in ''|*[!0-9]*) ;; *) tmux set-option -t "$tgt" -p @minimize_saved   "$saved"  ;; esac
+    case "$savedw" in ''|*[!0-9]*) ;; *) tmux set-option -t "$tgt" -p @minimize_saved_w "$savedw" ;; esac
+    case "$minh"   in ''|*[!0-9]*) ;; *) tmux set-option -t "$tgt" -p @minimize_minh    "$minh"   ;; esac
+    w=$(tmux display-message -p -t "$tgt" '#{window_id}')
+    case " $wins " in *" $w "*) ;; *) wins="$wins $w" ;; esac
+  done < "$f"
+  for w in $wins; do
+    _lock "$w"; tmux set-option -g @minimize_guard 1; apply "$w"; tmux set-option -gu @minimize_guard; _unlock
+  done
+}
+
 case "${1:-}" in
   toggle)    toggle_pane "$2" ;;
   peekin)    peekin "$2" ;;
   peekout)   peekout "$2" ;;
   dragend)   dragend "$2" ;;
   dashboard) dashboard "$2" ;;
+  save-state)    save_state "${2:-}" ;;
+  restore-state) restore_state "${2:-}" ;;
   minh-set)    set_minh "$2" "$3" ;;
   minh-grow)   adjust_minh "$2" "$3" ;;
   minh-shrink) adjust_minh "$2" "-$3" ;;

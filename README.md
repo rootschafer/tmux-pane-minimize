@@ -60,6 +60,18 @@ one into minimized strips — a quick "focus on this pane" view. Press it again 
 restore the previous layout exactly. Panes you had already minimized yourself stay
 minimized through the round trip.
 
+### tmux-resurrect / continuum
+[tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) restores the window
+layout (so minimized panes come back the right *size*), but not the per-pane options
+that mark a pane as minimized — so without help the plugin forgets which panes were
+minimized after a restore. With `@minimize-resurrect 'on'` (the default) this plugin
+hooks resurrect's save/restore to persist that state, keyed by
+`session:window.pane_index`. **It sets `@resurrect-hook-post-save-all` and
+`@resurrect-hook-post-restore-all`** — if you already use those hooks yourself, set
+`@minimize-resurrect 'off'` and call `scripts/tmux-min.sh save-state` / `restore-state`
+from your own hooks instead. (Peek and the dashboard grouping are transient and aren't
+persisted.)
+
 ## Options
 ```tmux
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
@@ -79,6 +91,10 @@ set -g @minimize-minh-shrink-key ''   # e.g. '-'  shrink it
 set -g @minimize-minh-reset-key  ''   # e.g. '0'  reset it to @minimize-height
 
 set -g @minimize-dashboard-key   ''   # e.g. 'M'  minimize all panes but the active one
+
+set -g @minimize-resurrect 'on'       # persist minimized state across tmux-resurrect
+                                      # save/restore (set 'off' if you manage the
+                                      # resurrect hooks yourself — see below)
 ```
 The default marker icon (`󰘖`) is a Nerd Font glyph; override the format with any
 glyph your font has (see the fallback note below).

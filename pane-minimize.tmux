@@ -41,6 +41,17 @@ RESET_KEY="$(opt @minimize-minh-reset-key '')"
 DASH_KEY="$(opt @minimize-dashboard-key '')"
 [ -n "$DASH_KEY" ] && tmux bind-key "$DASH_KEY" run-shell "$SCRIPT dashboard #{pane_id}"
 
+# tmux-resurrect persistence (on by default; set @minimize-resurrect 'off' to disable).
+# resurrect restores #{window_layout} (minimized geometry) but not our per-pane options,
+# so we persist them via resurrect's post-save/post-restore hooks. NOTE: this SETS those
+# two hooks — if you already use @resurrect-hook-post-save-all / -post-restore-all
+# yourself, set @minimize-resurrect 'off' and call `tmux-min.sh save-state`/`restore-state`
+# from your own hooks instead.
+if [ "$(opt @minimize-resurrect 'on')" = "on" ]; then
+  tmux set-option -g @resurrect-hook-post-save-all    "bash '$SCRIPT' save-state"
+  tmux set-option -g @resurrect-hook-post-restore-all "bash '$SCRIPT' restore-state"
+fi
+
 # Forget minimized state when the user resizes the ACTIVE pane taller themselves.
 #  - keyboard / resize-pane command fires after-resize-pane
 #  - @minimize_guard skips the plugin's own resizes

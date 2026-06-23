@@ -304,6 +304,43 @@ part_dashboard() {
   assert_live "p5 pre-minimized preserved"
 }
 
+# --- Part 6: tmux-resurrect persistence (save-state/restore-state) -----------
+part_resurrect() {
+  local top bot state a minh p
+  state="/tmp/tmin-state-$SOCK"
+  T kill-server >/dev/null 2>&1
+  T new-session -d -s rs -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"           # minimize top
+  bash "$ENGINE" minh-set "$top" 8       # with a custom height
+  T select-pane -t "$bot"
+
+  bash "$ENGINE" save-state "$state"
+  if [ -s "$state" ]; then ok "p6 state saved to sidecar"; else bad "p6 empty/missing state file"; fi
+
+  # simulate a restart: resurrect would restore the window_layout (so geometry is back),
+  # but the @minimize_* options are gone. Clear them to model that.
+  for p in $(T list-panes -F '#{pane_id}'); do
+    T set-option -t "$p" -pu @minimize_active
+    T set-option -t "$p" -pu @minimize_saved
+    T set-option -t "$p" -pu @minimize_minh
+  done
+
+  bash "$ENGINE" restore-state "$state"
+  a=$(T display-message -p -t "$top" '#{?@minimize_active,1,0}')
+  minh=$(T show-options -t "$top" -pqv @minimize_minh 2>/dev/null || true)
+  if [ "$a" = 1 ]; then ok "p6 minimized flag restored"; else bad "p6 minimized flag not restored"; fi
+  if [ "$minh" = 8 ]; then ok "p6 custom minh restored"; else bad "p6 minh=$minh (expected 8)"; fi
+  if [ "$(pane_h "$top")" = 8 ]; then ok "p6 geometry repinned to custom height"; else bad "p6 top h=$(pane_h "$top") (expected 8)"; fi
+  assert_live "p6 after restore-state"
+
+  # restore-state on a missing/empty file must be a harmless no-op.
+  bash "$ENGINE" restore-state "/tmp/does-not-exist-$SOCK" && ok "p6 restore of missing file is a no-op"
+  rm -f "$state"
+}
+
 main() {
   part1
   part1_stale
@@ -311,6 +348,7 @@ main() {
   part3
   part_minh
   part_dashboard
+  part_resurrect
   summary "live_sequences"
 }
 
