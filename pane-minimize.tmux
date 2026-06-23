@@ -66,8 +66,10 @@ _contrast_fg() {
 # "<  >" (expanded). chevron-left = U+F053 (\xef\x81\x93), chevron-right = U+F054 (\xef\x81\x94).
 MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xef\x81\x94 \xef\x81\x93')")"
 MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xef\x81\x93 \xef\x81\x94')")"
-MARKER_WIDTH="$(opt @minimize-marker-width '5')"           # 3 or 5
-MARKER_ICON_COLOR="$(opt @minimize-marker-icon-color 'auto')"   # 'auto' = black/white by bg luminance
+MARKER_WIDTH="$(opt @minimize-marker-width '3')"           # 3 (snug) or 5 (padded)
+# Icon colour: 'default' = terminal foreground (blends with your theme); 'auto' = pick
+# black/white from the pill bg luminance for guaranteed contrast; or any tmux colour.
+MARKER_ICON_COLOR="$(opt @minimize-marker-icon-color 'default')"
 MARKER_BG="$(opt @minimize-marker-bg "$(_border_fg pane-border-style)")"
 MARKER_BG_ACTIVE="$(opt @minimize-marker-bg-active "$(_border_fg pane-active-border-style)")"
 [ -z "$MARKER_BG" ] && MARKER_BG='colour238'               # fallback when no border style set
