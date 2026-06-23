@@ -152,9 +152,6 @@ set -g @minimize-resurrect 'on'       # persist minimized state across tmux-resu
                                       # save/restore (set 'off' if you manage the
                                       # resurrect hooks yourself — see below)
 ```
-The default marker icon (`󰘖`) is a Nerd Font glyph; override the format with any
-glyph your font has (see the fallback note below).
-
 A typical setup that turns on the optional keys:
 ```tmux
 set -g @minimize-key 'C-t'              # prefix + C-t  toggle minimize
@@ -162,29 +159,31 @@ set -g @minimize-dashboard-key 'M'      # prefix + M    minimize all but the act
 set -g @minimize-minh-grow-key '+'      # prefix + +    taller minimized height
 set -g @minimize-minh-shrink-key '-'    # prefix + -    shorter
 set -g @minimize-minh-reset-key '0'     # prefix + 0    back to @minimize-height
-set -g @minimize-marker 'on'            # show the on-border state marker
+set -g @minimize-marker-style 'pill'    # 'flat' (default) or 'pill'
 set -g mouse on                         # for the right-click menu + border-drag sizing
 ```
 Only `@minimize-key` is bound by default; the grow/shrink/reset and dashboard keys are
-opt-in (empty until you set them). Resurrect persistence is on by default.
+opt-in (empty until you set them). The marker and resurrect persistence are on by default.
 
-### About the marker (opt-in)
-The marker needs a pane-border status line, so enabling `@minimize-marker on`
-makes the plugin set `pane-border-status` and `pane-border-format` for you (this
-replaces the border line's contents with just the marker — non-minimized panes show
-an empty line). If you already customize those, leave the marker `off` and add your
-own conditional on `#{@minimize_active}` instead, e.g.:
-```tmux
-set -g pane-border-status top
-set -g pane-border-format '#{pane_index} #{?@minimize_active,#[fg=yellow]  ⌄ ,}'
-```
-The leading spaces matter: with `#[align=right]` the border line is drawn right up
-to the marker, so a space or two keeps it from butting against the line.
+### About the marker
+The marker is **on by default** and needs the pane-border status line, so the plugin sets
+`pane-border-status` and `pane-border-format` for you. By default it prepends the pane
+index, then on a minimized pane appends two chevrons that point inward (collapsed) /
+outward (peeked). Two looks:
+- **flat** (default) — just the chevrons, in `fg=default`, which on a pane border *is* the
+  border line's colour — so they match the border per active/inactive pane and stay
+  transparent. Clean on any theme; nothing to configure.
+- **pill** (`@minimize-marker-style pill`) — a rounded background in your border colour
+  with the chevrons cut out of it (via `#[reverse]`, so they read on any theme).
 
-**Glyph not rendering?** The default (`󰘖`) needs a Nerd Font. If you see a box, set
-`@minimize-marker-format` to a glyph your font has — e.g. universal `+`, `▢`, or `⌄`.
-The colour (`colour214` orange) is configurable in the same format; pick a
-high-contrast colour if it's hard to read against your theme.
+To bypass all of this and draw the marker yourself, set `@minimize-marker off` and add a
+`#{?@minimize_active,…}` conditional to your own `pane-border-format`. To keep the marker
+but change what's left of it, set `@minimize-marker-left-format`.
+
+**Glyphs not rendering?** The chevrons need a Nerd Font (or any font with U+F053/F054). If
+you see boxes, set `@minimize-marker-icon` / `-icon-active` to glyphs your font has. The
+rounded pill caps need Powerline glyphs (U+E0B6/E0B4) — set `@minimize-marker-left ''` /
+`-right ''` to drop them for square ends.
 
 ## Mouse: the right-click menu
 `@minimize-menu on` adds a **Minimize / Un-Minimize** item (toggling per the pane's
