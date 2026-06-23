@@ -83,10 +83,11 @@ if [ "$MARKER_ICON_COLOR" = "auto" ]; then
   ICONFG_ACTIVE="$(_contrast_fg "$MARKER_BG_ACTIVE")"
 fi
 # A pill: rounded left cap (drawn in the bg colour on the default background), the icon on
-# the bg, then the right cap. Commas inside #[...] are escaped (#,) so they survive being
-# nested in a #{?pane_active,...} conditional.
+# the bg, then the right cap. Uses SINGLE-attribute #[...] blocks (no commas) so it can be
+# safely nested inside #{?pane_active,...} / #{?@minimize_active,...} — a comma inside a
+# style like #[bg=x,fg=y] would split the surrounding conditional.
 _pill() {  # $1 bg  $2 icon  $3 icon-fg
-  printf '#[fg=%s]%s#[bg=%s#,fg=%s]%s%s%s#[bg=default#,fg=%s]%s' \
+  printf '#[fg=%s]%s#[bg=%s]#[fg=%s]%s%s%s#[bg=default]#[fg=%s]%s' \
     "$1" "$MARKER_LCAP" "$1" "$3" "$MPAD" "$2" "$MPAD" "$1" "$MARKER_RCAP"
 }
 # Default marker = active/inactive pill; @minimize-marker-format still wins if set (override).
@@ -163,9 +164,12 @@ if [ "$PEEK" = "on" ]; then
 fi
 
 # Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.
-# Minimized panes show MARKER_FMT (a state indicator); normal panes show nothing.
+# Every pane shows @minimize-marker-left-format (e.g. your pane index/title); minimized
+# panes additionally get the right-aligned pill. Set the left-format to keep your own
+# border contents while letting the plugin own the marker.
 if [ "$MARKER" = "on" ]; then
+  MARKER_LEFT="$(opt @minimize-marker-left-format '')"
   case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac  # pane-border-status only takes top|bottom
   tmux set-option -g pane-border-status "$MARKER_POS"
-  tmux set-option -g pane-border-format "#{?@minimize_active,${MARKER_FMT},}"
+  tmux set-option -g pane-border-format "${MARKER_LEFT}#{?@minimize_active,${MARKER_FMT},}"
 fi
