@@ -15,8 +15,8 @@ VERBOSE=1 tests/run.sh # print every passing assertion too
 |------|------|
 | `assert_layout.sh` | **Invariant checker.** Independent re-implementation of the layout parser. Asserts every box ≥1 (fails loudly on any 0), `Σ child + borders == parent` for each split, contiguity, and a valid checksum. Run standalone: `assert_layout.sh '<cs,geom>'`. |
 | `gen_layouts.sh` | **Layout generator.** Emits all trees of 1–4 leaves (h/v 2–4 splits + one level of nesting, incl. the column-beside-stack bug shape) at sizes 24×8 / 80×24 / 222×61. |
-| `transform_props.sh` | **Offline property suite** (≈7.6k cases). For every generated layout × every MINSET subset × every WPANE × WVAL extreme `{0,1,3,9,1000}`, runs the pure `transform` and checks invariants. `transform` is referentially transparent, so this is fully deterministic. |
-| `live_sequences.sh` | **Live suite** on an isolated `tmux -L … -f /dev/null` server with a socket-patched engine. Part 1 scripted regressions, Part 1b stale-saved-dimension regression, Part 2 deterministic fuzz, Part 3 race-exposer. Skips cleanly if tmux is absent. |
+| `transform_props.sh` | **Offline property suite** (≈11k cases). For every generated layout × every MINSET subset × every WPANE × WVAL extreme `{0,1,3,9,1000}` × per-pane `MINH` extremes, plus a `BORDER_POS` top/bottom edge-bonus pass, runs the pure `transform` and checks invariants. `transform` is referentially transparent, so this is fully deterministic. |
+| `live_sequences.sh` | **Live suite** on an isolated `tmux -L … -f /dev/null` server with a socket-patched engine. Parts: 1 scripted regressions, 1b stale-saved-dimension, 2 deterministic fuzz, 3 race-exposer (busy-marker overlap detector), `minh` per-pane height, dashboard, peek (peekin/peekout + resize-while-peeked), resize-window repin, resurrect round-trip, and an **end-to-end resurrect** test that drives the real `save.sh` (set `RESURRECT_PATH` to point at a checkout; skips if not found). Skips cleanly if tmux is absent. |
 | `lib.sh` | shared pass/fail counters. |
 | `run.sh` | top-level runner (CI entry point). |
 

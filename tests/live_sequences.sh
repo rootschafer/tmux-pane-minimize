@@ -341,6 +341,121 @@ part_resurrect() {
   rm -f "$state"
 }
 
+# --- Part 8: peek-on-focus (peekin/peekout) + resize-while-peeked save ------
+part_peek() {
+  local top bot h saved
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"                 # minimize top (records its prior height)
+  saved=$(T show-options -t "$top" -pqv @minimize_saved 2>/dev/null || true)
+
+  T select-pane -t "$top"                      # focus it -> eligible to peek
+  bash "$ENGINE" peekin "$top"
+  h=$(pane_h "$top")
+  if [ "$h" -gt 3 ]; then ok "p8 peekin expands the minimized pane (h=$h)"; else bad "p8 peekin did not expand (h=$h)"; fi
+  if [ "$(T show-options -t "$top" -pqv @minimize_peek 2>/dev/null || true)" = 1 ]; then ok "p8 peek flag set"; else bad "p8 peek flag not set"; fi
+  assert_live "p8 after peekin"
+
+  # resize while peeked, then dragend remembers the new height as the saved/peek size
+  T set-option -g @minimize_guard 1
+  T resize-pane -t "$top" -y 16 >/dev/null 2>&1
+  T set-option -gu @minimize_guard
+  bash "$ENGINE" dragend "$(T display-message -p '#{window_id}')"
+  saved=$(T show-options -t "$top" -pqv @minimize_saved 2>/dev/null || true)
+  if [ "${saved:-0}" -ge 14 ]; then ok "p8 dragend saved resize-while-peeked height ($saved)"; else bad "p8 peeked resize not saved (saved=$saved)"; fi
+
+  T select-pane -t "$bot"                      # focus away
+  bash "$ENGINE" peekout "$top"
+  h=$(pane_h "$top")
+  if [ "$h" = 3 ]; then ok "p8 peekout re-collapses to MIN_H"; else bad "p8 peekout h=$h (expected 3)"; fi
+  assert_live "p8 after peekout"
+}
+
+# --- Part 9: after-resize-window repins minimized panes ---------------------
+# The hook firing on resize is tmux's guarantee; we deterministically verify (a) the
+# hook is wired to repin, and (b) repin re-pins a pane that a window resize rescaled.
+part_resize_window() {
+  local top h hook
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0
+  bash "$PLUGIN"
+  hook=$(T show-hooks -g 2>/dev/null | grep after-resize-window || true)
+  if printf '%s' "$hook" | grep -q 'repin'; then ok "p9 after-resize-window hook wired to repin"; else bad "p9 hook missing/incorrect: [$hook]"; fi
+
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"
+  T resize-window -y 44 >/dev/null 2>&1                          # rescales panes proportionally
+  if [ "$(pane_h "$top")" != 3 ]; then ok "p9 resize rescaled the minimized pane (pre-repin)"; else ok "p9 (resize kept size)"; fi
+  bash "$ENGINE" repin "$(T display-message -p '#{window_id}')"  # what the hook fires
+  h=$(pane_h "$top")
+  if [ "$h" = 3 ]; then ok "p9 repin re-pins minimized pane to MIN_H after resize"; else bad "p9 not repinned (h=$h)"; fi
+  assert_live "p9 after resize + repin"
+}
+
+# Locate a tmux-resurrect install (env override, common plugin dirs, or the nix store).
+find_resurrect() {
+  local d
+  for d in "${RESURRECT_PATH:-}" \
+           "$HOME/.tmux/plugins/tmux-resurrect" \
+           "$HOME/.config/tmux/plugins/tmux-resurrect"; do
+    [ -n "$d" ] && [ -f "$d/scripts/save.sh" ] && { printf '%s' "$d"; return 0; }
+  done
+  d=$(ls -d /nix/store/*tmuxplugin-resurrect*/share/tmux-plugins/resurrect 2>/dev/null | head -1)
+  [ -n "$d" ] && [ -f "$d/scripts/save.sh" ] && { printf '%s' "$d"; return 0; }
+  return 1
+}
+
+# --- Part 7: END-TO-END resurrect (drives the REAL resurrect save.sh) --------
+# resurrect's restore.sh needs an attached client (it switch-clients / send-keys to
+# respawn programs), so it can't run headless. We therefore drive the real save.sh
+# (which runs headless and triggers our post-save hook), then reconstruct exactly what
+# resurrect's restore PRODUCES — the same panes with the saved window_layout applied —
+# and run our restore-state, asserting the minimized state is faithfully re-applied.
+part_resurrect_e2e() {
+  local res rdir rscripts state saved top f
+  res=$(find_resurrect) || { ok "p7 e2e resurrect skipped (resurrect not installed)"; return 0; }
+
+  rdir="/tmp/tmin-rdir-$SOCK"; rscripts="/tmp/tmin-rscripts-$SOCK"; state="/tmp/tmin-e2e-$SOCK"
+  rm -rf "$rdir" "$rscripts" "$state"; mkdir -p "$rdir" "$rscripts"
+  for f in "$res"/scripts/*.sh; do sed "s|tmux |tmux -L $SOCK |g" "$f" > "$rscripts/$(basename "$f")"; done
+  chmod +x "$rscripts"/*.sh
+
+  T kill-server >/dev/null 2>&1
+  T new-session -d -s work -x 80 -y 40
+  T set-option -g @resurrect-dir "$rdir"
+  T set-option -g @resurrect-hook-post-save-all "bash '$ENGINE' save-state '$state'"
+  T split-window -v -t 0
+  top=$(T list-panes -t work -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"
+  bash "$ENGINE" minh-set "$top" 6
+  saved=$(T display-message -p -t work '#{window_layout}')
+
+  # REAL resurrect save -> writes its dump AND fires our post-save hook.
+  bash "$rscripts/save.sh" >/dev/null 2>&1
+  if ls "$rdir"/tmux_resurrect_*.txt >/dev/null 2>&1; then ok "p7 real resurrect save produced a dump"; else bad "p7 resurrect save produced no dump"; fi
+  if [ -s "$state" ]; then ok "p7 post-save hook wrote our sidecar"; else bad "p7 post-save hook did not write sidecar"; fi
+
+  # Restart: reconstruct what resurrect restore produces (panes + saved layout).
+  T kill-server >/dev/null 2>&1
+  T new-session -d -s work -x 80 -y 40
+  T split-window -v -t 0
+  T select-layout -t work "$saved"
+  bash "$ENGINE" restore-state "$state"
+
+  local nmin; nmin=$(T list-panes -t work -F '#{@minimize_active}' | grep -c 1 || true); : "${nmin:=0}"
+  if [ "$nmin" -ge 1 ]; then ok "p7 minimized state restored from real save dump"
+  else bad "p7 minimized state NOT restored after e2e cycle"; fi
+  local mh; mh=$(T list-panes -t work -F '#{@minimize_minh}' | tr -d '\n ' )
+  if printf '%s' "$mh" | grep -q 6; then ok "p7 custom minh ($mh) restored e2e"; else bad "p7 custom minh not restored (got [$mh])"; fi
+  assert_live "p7 e2e layout valid"
+
+  rm -rf "$rdir" "$rscripts" "$state"
+}
+
 main() {
   part1
   part1_stale
@@ -348,7 +463,10 @@ main() {
   part3
   part_minh
   part_dashboard
+  part_peek
+  part_resize_window
   part_resurrect
+  part_resurrect_e2e
   summary "live_sequences"
 }
 

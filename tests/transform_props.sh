@@ -57,8 +57,11 @@ check_one() {
 
 # Enumerate every subset of a space-delimited leaf list; emit each as " a b ".
 # Bash 3.2: no associative arrays; iterate bitmask 0..2^k-1 (k<=4 -> <=16).
+# run_subsets LAYOUT LEAVES [plain_only]
+# plain_only=1 runs ONLY the plain-minimize subset check (used for the border-status
+# edge-bonus passes, to keep that 3x multiplier cheap).
 run_subsets() {
-  local layout="$1" leaves="$2"
+  local layout="$1" leaves="$2" plain_only="${3:-0}"
   local arr k mask i sub bit savedw wpane lo wv mh
   # shellcheck disable=SC2206
   arr=($leaves)
@@ -73,27 +76,29 @@ run_subsets() {
     done
 
     # 1) plain minimize, no restore pane
-    check_one "subset[$sub]" "$layout" "$sub" " " "" 0
+    check_one "subset[$sub] bp=$BORDER_POS" "$layout" "$sub" " " "" 0
 
-    # 1b) per-pane custom minimized height: give each minimized pane in the subset a
-    #     custom @minimize_minh over extremes {1, MIN_H, mid, overflow}. Bounded so it
-    #     doesn't blow up runtime; reconcile must keep every result valid.
-    for lo in "${arr[@]}"; do
-      case " $sub " in *" $lo "*) ;; *) continue ;; esac   # only minimized panes
-      for mh in 1 3 30 999; do
-        check_one "subset[$sub] minh=$lo:$mh" "$layout" "$sub" " " "" 0 " ${lo}:${mh} "
-      done
-    done
-
-    # 2) un-minimize/peek: every leaf as WPANE x every WVAL extreme.
-    #    Also exercise a SAVEDW entry (saved pre-narrow width) for that pane.
-    if [ "${QUICK:-0}" != 1 ]; then
+    if [ "$plain_only" != 1 ]; then
+      # 1b) per-pane custom minimized height: give each minimized pane in the subset a
+      #     custom @minimize_minh over extremes {1, MIN_H, mid, overflow}. Bounded so it
+      #     doesn't blow up runtime; reconcile must keep every result valid.
       for lo in "${arr[@]}"; do
-        savedw=" ${lo}:80 "
-        for wv in $WVALS; do
-          check_one "subset[$sub] wpane=$lo wval=$wv" "$layout" "$sub" "$savedw" "$lo" "$wv"
+        case " $sub " in *" $lo "*) ;; *) continue ;; esac   # only minimized panes
+        for mh in 1 3 30 999; do
+          check_one "subset[$sub] minh=$lo:$mh" "$layout" "$sub" " " "" 0 " ${lo}:${mh} "
         done
       done
+
+      # 2) un-minimize/peek: every leaf as WPANE x every WVAL extreme.
+      #    Also exercise a SAVEDW entry (saved pre-narrow width) for that pane.
+      if [ "${QUICK:-0}" != 1 ]; then
+        for lo in "${arr[@]}"; do
+          savedw=" ${lo}:80 "
+          for wv in $WVALS; do
+            check_one "subset[$sub] wpane=$lo wval=$wv" "$layout" "$sub" "$savedw" "$lo" "$wv"
+          done
+        done
+      fi
     fi
     mask=$((mask + 1))
   done
@@ -103,8 +108,13 @@ main() {
   local lay leaves
   while IFS="$(printf '\t')" read -r lay leaves; do
     [ -z "$lay" ] && continue
-    run_subsets "$lay" "$leaves"
+    BORDER_POS=off; run_subsets "$lay" "$leaves"
+    # Edge-bonus coverage: with the border-status line on, first/last minimized panes in
+    # a vertical split get +1. Re-run the (cheap) plain-minimize subset sweep for each.
+    BORDER_POS=top;    run_subsets "$lay" "$leaves" 1
+    BORDER_POS=bottom; run_subsets "$lay" "$leaves" 1
   done < <(/bin/bash "$TP_DIR/gen_layouts.sh")
+  BORDER_POS=off
   summary "transform_props (offline)"
 }
 
