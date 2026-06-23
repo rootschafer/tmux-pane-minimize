@@ -117,7 +117,18 @@ set -g @minimize-marker 'off'       # 'on' to show a state marker on minimized p
 set -g @minimize-menu 'off'         # 'on' to add Minimize/Un-Minimize to the
                                     #      right-click (MouseDown3Pane) pane menu
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
-set -g @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]'  # marker (minimized)
+
+# The marker is a rounded "pill" — a coloured background with a centred icon. By default
+# the pill background follows your pane border colours (active vs inactive) and the icon
+# uses the terminal foreground (so it contrasts on any theme).
+set -g @minimize-marker-icon ''         # the glyph (default nf-fa-window_minimize)
+set -g @minimize-marker-width '5'        # pill width: '5' (icon + padding) or '3' (snug)
+set -g @minimize-marker-icon-color 'default'   # icon colour ('default' = terminal fg)
+set -g @minimize-marker-bg ''            # inactive pill bg (default: inactive border colour)
+set -g @minimize-marker-bg-active ''     # active pill bg   (default: active border colour)
+set -g @minimize-marker-left ''         # left cap glyph (default rounded U+E0B6)
+set -g @minimize-marker-right ''        # right cap glyph (default rounded U+E0B4)
+set -g @minimize-marker-format ''        # set to fully override the built pill
 
 # Per-pane minimized height (optional). Drag a NON-active minimized pane's border to
 # set its minimized height; or bind keys to set it from the keyboard:

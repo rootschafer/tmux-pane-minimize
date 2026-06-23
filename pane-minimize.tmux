@@ -17,8 +17,39 @@ HEIGHT="$(opt @minimize-height '3')"
 MARKER="$(opt @minimize-marker 'off')"
 PEEK="$(opt @minimize-peek 'on')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
-MARKER_FMT="$(opt @minimize-marker-format '#[align=right]#[fg=colour214]#[bold]  󰘖 #[default]')"
 GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => forget
+
+# --- Marker "pill": a rounded background with a centred icon (opt-in via @minimize-marker).
+# Pull the fg= colour out of a pane-border style so the pill can default to the user's
+# border colours (inactive vs active).
+_border_fg() {
+  local s; s="$(tmux show-option -gqv "$1" 2>/dev/null || true)"
+  case "$s" in *fg=*) s="${s#*fg=}"; printf '%s' "${s%%[, ]*}" ;; *) printf '' ;; esac
+}
+# Default glyphs are written as UTF-8 byte escapes ($'\xHH..') so no multi-byte chars
+# live in the source and it stays bash-3.2 safe (no $'\u...'). Default icon =
+# nf-fa-window_minimize (U+F2D1). Override with a literal glyph in @minimize-marker-icon.
+MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xef\x8b\x91')")"
+MARKER_WIDTH="$(opt @minimize-marker-width '5')"            # 3 or 5
+MARKER_ICON_COLOR="$(opt @minimize-marker-icon-color 'default')"   # 'default' = terminal fg (contrasts)
+MARKER_BG="$(opt @minimize-marker-bg "$(_border_fg pane-border-style)")"
+MARKER_BG_ACTIVE="$(opt @minimize-marker-bg-active "$(_border_fg pane-active-border-style)")"
+[ -z "$MARKER_BG" ] && MARKER_BG='colour238'               # fallback when no border style set
+[ -z "$MARKER_BG_ACTIVE" ] && MARKER_BG_ACTIVE='colour110'
+case "$MARKER_WIDTH" in 3) MPAD='' ;; *) MPAD=' ' ;; esac   # 5 => one space each side; 3 => snug
+# Rounded end-caps (Powerline half-circles U+E0B6 / U+E0B4); override for square/flat/etc.
+MARKER_LCAP="$(opt @minimize-marker-left  "$(printf '\xee\x82\xb6')")"
+MARKER_RCAP="$(opt @minimize-marker-right "$(printf '\xee\x82\xb4')")"
+# A pill for one bg colour: rounded left cap (drawn in the bg colour on the default
+# background), the icon on the bg, then the right cap. Commas inside #[...] are escaped
+# (#,) so they survive being nested in a #{?pane_active,...} conditional.
+_pill() {  # $1 = bg colour
+  printf '#[fg=%s]%s#[bg=%s#,fg=%s]%s%s%s#[bg=default#,fg=%s]%s' \
+    "$1" "$MARKER_LCAP" "$1" "$MARKER_ICON_COLOR" "$MPAD" "$MARKER_ICON" "$MPAD" "$1" "$MARKER_RCAP"
+}
+# Default marker = active/inactive pill; @minimize-marker-format still wins if set (override).
+MARKER_PILL="#[align=right]#{?pane_active,$(_pill "$MARKER_BG_ACTIVE"),$(_pill "$MARKER_BG")}#[default]"
+MARKER_FMT="$(opt @minimize-marker-format "$MARKER_PILL")"
 
 # Toggle key (prefix table).
 tmux bind-key "$KEY" run-shell "$SCRIPT toggle #{pane_id}"
