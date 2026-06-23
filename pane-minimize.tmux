@@ -70,8 +70,9 @@ MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xef\x81\x93 \
 # Icon-colour default depends on style. FLAT: 'default' — on a pane border, fg=default IS
 # the border line colour, which tmux already swaps per active/inactive pane, so the
 # chevrons match the border for free and stay transparent (no pill bg to hide them).
-# PILL: 'auto' — black/white chosen from the (coloured) pill bg so the icon contrasts.
-case "$MARKER_STYLE" in pill) _icdef='auto' ;; *) _icdef='default' ;; esac
+# PILL: 'cutout' — the chevrons are drawn in the terminal background colour so they look
+# punched out of the coloured pill (theme-agnostic; needs no per-bg contrast guess).
+case "$MARKER_STYLE" in pill) _icdef='cutout' ;; *) _icdef='default' ;; esac
 MARKER_ICON_COLOR="$(opt @minimize-marker-icon-color "$_icdef")"
 
 if [ "$MARKER_STYLE" = "pill" ]; then
@@ -83,20 +84,31 @@ if [ "$MARKER_STYLE" = "pill" ]; then
   case "$MARKER_WIDTH" in 3) MPAD='' ;; *) MPAD=' ' ;; esac
   MARKER_LCAP="$(opt @minimize-marker-left  "$(printf '\xee\x82\xb6')")"   # rounded caps U+E0B6/E0B4
   MARKER_RCAP="$(opt @minimize-marker-right "$(printf '\xee\x82\xb4')")"
+  # SINGLE-attribute #[...] blocks (no commas) so the pill nests safely inside #{?...}.
+  if [ "$MARKER_ICON_COLOR" = "cutout" ]; then
+    # cutout: fg=bg-colour then #[reverse] -> the chevrons render in the terminal default
+    # background (cut out of the pill) regardless of theme; caps stay solid bg-coloured.
+    _pill() {  # $1 bg  $2 icon  ($3 unused)
+      printf '#[fg=%s]%s#[reverse]%s%s%s#[noreverse]#[fg=%s]%s' \
+        "$1" "$MARKER_LCAP" "$MPAD" "$2" "$MPAD" "$1" "$MARKER_RCAP"
+    }
+  else
+    # explicit / auto: solid pill with the icon in ICONFG ('auto' -> black/white by bg).
+    _pill() {  # $1 bg  $2 icon  $3 icon-fg
+      printf '#[fg=%s]%s#[bg=%s]#[fg=%s]%s%s%s#[bg=default]#[fg=%s]%s' \
+        "$1" "$MARKER_LCAP" "$1" "$3" "$MPAD" "$2" "$MPAD" "$1" "$MARKER_RCAP"
+    }
+  fi
   ICONFG="$MARKER_ICON_COLOR"; ICONFG_ACTIVE="$MARKER_ICON_COLOR"
   if [ "$MARKER_ICON_COLOR" = "auto" ]; then
     ICONFG="$(_contrast_fg "$MARKER_BG")"; ICONFG_ACTIVE="$(_contrast_fg "$MARKER_BG_ACTIVE")"
   fi
-  # SINGLE-attribute #[...] blocks (no commas) so the pill nests safely inside #{?...}.
-  _pill() {  # $1 bg  $2 icon  $3 icon-fg
-    printf '#[fg=%s]%s#[bg=%s]#[fg=%s]%s%s%s#[bg=default]#[fg=%s]%s' \
-      "$1" "$MARKER_LCAP" "$1" "$3" "$MPAD" "$2" "$MPAD" "$1" "$MARKER_RCAP"
-  }
   MARKER_DEFAULT="#[align=right]#{?pane_active,$(_pill "$MARKER_BG_ACTIVE" "$MARKER_ICON_ACTIVE" "$ICONFG_ACTIVE"),$(_pill "$MARKER_BG" "$MARKER_ICON" "$ICONFG")}#[default]"
 else
   # flat: just the chevrons in the icon colour (default == the border line colour). No pill
-  # background to hide them; transparent and self-matching per active/inactive state.
-  MARKER_DEFAULT="#[align=right]#[fg=${MARKER_ICON_COLOR}]#{?pane_active,${MARKER_ICON_ACTIVE},${MARKER_ICON}} #[default]"
+  # background to hide them; transparent and self-matching per active/inactive state. The
+  # leading space puts a gap between the border line and the chevrons.
+  MARKER_DEFAULT="#[align=right]#[fg=${MARKER_ICON_COLOR}] #{?pane_active,${MARKER_ICON_ACTIVE},${MARKER_ICON}} #[default]"
 fi
 MARKER_FMT="$(opt @minimize-marker-format "$MARKER_DEFAULT")"
 

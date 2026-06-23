@@ -124,11 +124,13 @@ set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
 #                    border-line colour, so they match the border per active/inactive pane
 #                    and stay transparent (no background).
 #   pill           — a rounded coloured background (your border colours) with the chevrons
-#                    on it; icon colour auto-picks black/white for contrast.
+#                    "cut out" of it (drawn in the terminal background via #[reverse], so
+#                    they stay sharp on any theme without a contrast guess).
 set -g @minimize-marker-style 'flat'    # 'flat' (transparent) | 'pill'
 set -g @minimize-marker-icon ''         # inactive glyph (default two chevrons, inward)
 set -g @minimize-marker-icon-active ''  # active/peeked glyph (default two chevrons, outward)
-set -g @minimize-marker-icon-color ''   # default: 'default' (flat) / 'auto' (pill); or a colour
+set -g @minimize-marker-icon-color ''   # default: 'default' (flat) / 'cutout' (pill); 'auto'
+                                        #          = black/white by bg luminance; or a colour
 # pill-only:
 set -g @minimize-marker-width '3'        # pill padding: '3' (snug) or '5'
 set -g @minimize-marker-bg ''            # inactive pill bg (default: inactive border colour)
