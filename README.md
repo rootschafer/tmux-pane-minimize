@@ -121,9 +121,10 @@ set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
 # The marker is a rounded "pill" — a coloured background with a centred icon. By default
 # the pill background follows your pane border colours (active vs inactive) and the icon
 # uses the terminal foreground (so it contrasts on any theme).
-set -g @minimize-marker-icon ''         # the glyph (default nf-fa-window_minimize)
+set -g @minimize-marker-icon ''         # inactive glyph (default nf-md-unfold_less_horizontal)
+set -g @minimize-marker-icon-active ''  # active/peeked glyph (default nf-md-unfold_more_horizontal)
 set -g @minimize-marker-width '5'        # pill width: '5' (icon + padding) or '3' (snug)
-set -g @minimize-marker-icon-color 'default'   # icon colour ('default' = terminal fg)
+set -g @minimize-marker-icon-color 'auto'   # 'auto' = black/white by bg luminance; or a colour
 set -g @minimize-marker-bg ''            # inactive pill bg (default: inactive border colour)
 set -g @minimize-marker-bg-active ''     # active pill bg   (default: active border colour)
 set -g @minimize-marker-left ''         # left cap glyph (default rounded U+E0B6)
