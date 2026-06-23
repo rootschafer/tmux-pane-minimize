@@ -113,23 +113,29 @@ set -g @minimize-key 'C-t'          # toggle key (prefix table)
 set -g @minimize-height '3'         # minimized height in rows
 set -g @minimize-width  '30'        # minimized width in columns (narrow column)
 set -g @minimize-peek 'on'          # 'off' to disable peek-on-focus
-set -g @minimize-marker 'off'       # 'on' to show a state marker on minimized panes
+set -g @minimize-marker 'on'        # 'off' to hide the on-border state marker
 set -g @minimize-menu 'off'         # 'on' to add Minimize/Un-Minimize to the
                                     #      right-click (MouseDown3Pane) pane menu
 set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
 
-# The marker is a rounded "pill" — a coloured background with a centred icon. By default
-# the pill background follows your pane border colours (active vs inactive) and the icon
-# uses the terminal foreground (so it contrasts on any theme).
-set -g @minimize-marker-icon ''         # inactive glyph (default nf-md-unfold_less_horizontal)
-set -g @minimize-marker-icon-active ''  # active/peeked glyph (default nf-md-unfold_more_horizontal)
-set -g @minimize-marker-width '5'        # pill width: '5' (icon + padding) or '3' (snug)
-set -g @minimize-marker-icon-color 'auto'   # 'auto' = black/white by bg luminance; or a colour
+# The marker shows two chevrons that point inward (minimized) / outward (peeked). Two
+# styles:
+#   flat (default) — just the chevrons, coloured 'default' which on a pane border is the
+#                    border-line colour, so they match the border per active/inactive pane
+#                    and stay transparent (no background).
+#   pill           — a rounded coloured background (your border colours) with the chevrons
+#                    on it; icon colour auto-picks black/white for contrast.
+set -g @minimize-marker-style 'flat'    # 'flat' (transparent) | 'pill'
+set -g @minimize-marker-icon ''         # inactive glyph (default two chevrons, inward)
+set -g @minimize-marker-icon-active ''  # active/peeked glyph (default two chevrons, outward)
+set -g @minimize-marker-icon-color ''   # default: 'default' (flat) / 'auto' (pill); or a colour
+# pill-only:
+set -g @minimize-marker-width '3'        # pill padding: '3' (snug) or '5'
 set -g @minimize-marker-bg ''            # inactive pill bg (default: inactive border colour)
 set -g @minimize-marker-bg-active ''     # active pill bg   (default: active border colour)
 set -g @minimize-marker-left ''         # left cap glyph (default rounded U+E0B6)
 set -g @minimize-marker-right ''        # right cap glyph (default rounded U+E0B4)
-set -g @minimize-marker-format ''        # set to fully override the built pill
+set -g @minimize-marker-format ''        # set to fully override the built marker
 
 # Per-pane minimized height (optional). Drag a NON-active minimized pane's border to
 # set its minimized height; or bind keys to set it from the keyboard:
