@@ -14,7 +14,7 @@ opt() { # @name  default
 
 KEY="$(opt @minimize-key 'C-t')"
 HEIGHT="$(opt @minimize-height '3')"
-MARKER="$(opt @minimize-marker 'off')"
+MARKER="$(opt @minimize-marker 'on')"
 PEEK="$(opt @minimize-peek 'on')"
 MARKER_POS="$(opt @minimize-marker-position 'top')"
 GROW=$(( HEIGHT + 1 ))   # "manually resized" threshold: taller than this => forget
@@ -61,10 +61,10 @@ _contrast_fg() {
   [ "$lum" -gt 140 ] && printf 'colour16' || printf 'colour231'
 }
 # Default glyphs are UTF-8 byte escapes (printf '\xHH') so no multi-byte chars live in the
-# source (bash-3.2 safe; no $'\u'). Inactive icon = nf-md-unfold_less_horizontal (U+F0562);
-# the active/peeked pane shows nf-md-unfold_more_horizontal (U+F0565).
-MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xf3\xb0\x95\xa2')")"
-MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xf3\xb0\x95\xa5')")"
+# source (bash-3.2 safe; no $'\u'). Inactive icon = nf-md-unfold_less_horizontal (U+F054E);
+# the active/peeked pane shows nf-md-unfold_more_horizontal (U+F054F).
+MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xf3\xb0\x95\x8e')")"
+MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xf3\xb0\x95\x8f')")"
 MARKER_WIDTH="$(opt @minimize-marker-width '5')"           # 3 or 5
 MARKER_ICON_COLOR="$(opt @minimize-marker-icon-color 'auto')"   # 'auto' = black/white by bg luminance
 MARKER_BG="$(opt @minimize-marker-bg "$(_border_fg pane-border-style)")"
@@ -168,7 +168,9 @@ fi
 # panes additionally get the right-aligned pill. Set the left-format to keep your own
 # border contents while letting the plugin own the marker.
 if [ "$MARKER" = "on" ]; then
-  MARKER_LEFT="$(opt @minimize-marker-left-format '')"
+  # Left of the marker we show the pane index by default (overridable / set '' for a
+  # pill-only border); minimized panes also get the right-aligned pill.
+  MARKER_LEFT="$(opt @minimize-marker-left-format '#[align=left] #{pane_index} ')"
   case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac  # pane-border-status only takes top|bottom
   tmux set-option -g pane-border-status "$MARKER_POS"
   tmux set-option -g pane-border-format "${MARKER_LEFT}#{?@minimize_active,${MARKER_FMT},}"
