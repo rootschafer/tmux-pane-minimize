@@ -428,9 +428,11 @@ part_marker() {
   local fmt
   T kill-server >/dev/null 2>&1
   T new-session -d -x 80 -y 24
-  # Fresh marker state (the host's /etc/tmux.conf may have loaded the real plugin already),
-  # then simulate a user who has set their OWN custom border format + position.
+  # Fresh marker state (the host's /etc/tmux.conf may have loaded the real plugin already
+  # AND set @minimize-marker-* options — the isolated server still reads /etc/tmux.conf, so
+  # clear everything we depend on), then simulate a user with their OWN custom border.
   T set -gu @minimize_marker_installed; T set -gu @minimize_orig_format
+  T set -gu @minimize-marker-left-format; T set -gu @minimize-marker-position
   T set -g pane-border-status bottom
   T set -g pane-border-format 'MYTITLE#{pane_index}'
   bash "$PLUGIN"

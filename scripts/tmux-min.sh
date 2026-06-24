@@ -218,21 +218,27 @@ reset_minh() {
 #    saved layout verbatim, so panes return to their exact prior sizes. Falls back to a
 #    normal recompute if the saved layout no longer fits (a pane was added/closed).
 dashboard() {
-  local pane="$1" win active saved id dz dap dam
+  local pane="$1" win saved id pa ma ph pw dz dap dam
+  local -a cmd
   win=$(tmux display-message -p -t "$pane" '#{window_id}')
   _lock "$win"
   tmux set-option -g @minimize_guard 1
   saved=$(tmux show-options -wqv @minimize_dashboard_layout 2>/dev/null || true)
   if [ -n "$saved" ]; then
+    # EXIT: clear the flags WE set, then restore the saved layout. Coalesced — all the
+    # per-pane unsets go out in ONE chained tmux call (was 4 round-trips per pane).
+    cmd=()
     while read -r id; do
       [ -z "$id" ] && continue
-      tmux set-option -t "$id" -p @minimize_active 0
-      tmux set-option -t "$id" -pu @minimize_peek
-      tmux set-option -t "$id" -pu @minimize_minh
-      tmux set-option -t "$id" -pu @minimize_dashboard
+      [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+      cmd+=( set-option -t "$id" -p @minimize_active 0 ';'
+             set-option -t "$id" -pu @minimize_peek ';'
+             set-option -t "$id" -pu @minimize_minh ';'
+             set-option -t "$id" -pu @minimize_dashboard )
     done <<EOF
 $(tmux list-panes -t "$win" -F '#{?@minimize_dashboard,#{pane_id},}')
 EOF
+    [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
     tmux set-option -wu @minimize_dashboard_layout
     # Restore the exact prior layout verbatim (NOT via apply()'s recompute, which would
     # re-derive sizes). Read zoom + active-pane state in one call so we can preserve zoom
@@ -247,19 +253,25 @@ EOF
       apply "$win"
     fi
   else
-    active=$(tmux display-message -p -t "$pane" '#{pane_id}')
+    # ENTER: save the layout, then minimize every pane that is neither the active one nor
+    # already user-minimized (those survive the round trip). Coalesced — read all pane
+    # state in ONE list-panes (was 3 display-messages per pane) and set all the flags in
+    # ONE chained tmux call (was 4 set-options per pane).
     tmux set-option -w @minimize_dashboard_layout "$(tmux display-message -p -t "$win" '#{window_layout}')"
-    while read -r id; do
+    cmd=()
+    while IFS='|' read -r id pa ma ph pw; do
       [ -z "$id" ] && continue
-      [ "$id" = "$active" ] && continue
-      [ "$(tmux display-message -p -t "$id" '#{?@minimize_active,1,0}')" = 1 ] && continue
-      tmux set-option -t "$id" -p @minimize_saved   "$(tmux display-message -p -t "$id" '#{pane_height}')"
-      tmux set-option -t "$id" -p @minimize_saved_w "$(tmux display-message -p -t "$id" '#{pane_width}')"
-      tmux set-option -t "$id" -p @minimize_active 1
-      tmux set-option -t "$id" -p @minimize_dashboard 1
+      [ "$pa" = 1 ] && continue          # keep the active pane
+      [ "$ma" = 1 ] && continue          # leave user-minimized panes as-is
+      [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+      cmd+=( set-option -t "$id" -p @minimize_saved "$ph" ';'
+             set-option -t "$id" -p @minimize_saved_w "$pw" ';'
+             set-option -t "$id" -p @minimize_active 1 ';'
+             set-option -t "$id" -p @minimize_dashboard 1 )
     done <<EOF
-$(tmux list-panes -t "$win" -F '#{pane_id}')
+$(tmux list-panes -t "$win" -F '#{pane_id}|#{pane_active}|#{?@minimize_active,1,0}|#{pane_height}|#{pane_width}')
 EOF
+    [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
     apply "$win"
   fi
   tmux set-option -gu @minimize_guard
