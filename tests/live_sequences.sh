@@ -423,6 +423,29 @@ part_resize_window() {
   assert_live "p9 after resize + repin"
 }
 
+# --- Part M: marker is a good citizen (augments pane-border-format, never clobbers) -----
+part_marker() {
+  local fmt
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 24
+  # Fresh marker state (the host's /etc/tmux.conf may have loaded the real plugin already),
+  # then simulate a user who has set their OWN custom border format + position.
+  T set -gu @minimize_marker_installed; T set -gu @minimize_orig_format
+  T set -g pane-border-status bottom
+  T set -g pane-border-format 'MYTITLE#{pane_index}'
+  bash "$PLUGIN"
+  fmt=$(T show-option -gqv pane-border-format)
+  case "$fmt" in *MYTITLE*) ok "pM custom pane-border-format preserved (augmented, not clobbered)" ;; *) bad "pM clobbered custom format: [$fmt]" ;; esac
+  case "$fmt" in *@minimize_active*) ok "pM marker appended for minimized panes" ;; *) bad "pM marker not appended: [$fmt]" ;; esac
+  if [ "$(T show-option -gqv pane-border-status)" = bottom ]; then ok "pM existing border position respected (not forced to top)"; else bad "pM forced border position"; fi
+  bash "$PLUGIN"   # reload must be idempotent — no doubled title/marker
+  fmt=$(T show-option -gqv pane-border-format)
+  if [ "$(printf '%s' "$fmt" | grep -o MYTITLE | wc -l | tr -d ' ')" = 1 ] && \
+     [ "$(printf '%s' "$fmt" | grep -o @minimize_active | wc -l | tr -d ' ')" = 1 ]; then
+    ok "pM reload idempotent (marker not doubled)"
+  else bad "pM reload doubled the marker: [$fmt]"; fi
+}
+
 # --- Part X: exotic setups (zoom, single pane, base-index, deep nesting) ----
 part_exotic() {
   local act top p
@@ -531,6 +554,7 @@ main() {
   part_dashboard
   part_peek
   part_resize_window
+  part_marker
   part_exotic
   part_resurrect
   part_resurrect_e2e

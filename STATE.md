@@ -27,9 +27,9 @@ per-window lock directory.
 | `@minimize-minh-step` | `1` | rows per grow/shrink step for the custom minimized height. |
 | `@minimize-minh-grow-key` / `-shrink-key` / `-reset-key` | *(unbound)* | opt-in keys for per-pane custom minimized height. |
 | `@minimize-marker` | `on` | own `pane-border-status`/`-format` and draw the minimized-pane marker. |
-| `@minimize-marker-position` | `top` | `top` or `bottom` (sets `pane-border-status`). |
+| `@minimize-marker-position` | *(respect existing)* | `top` or `bottom`. Unset = keep the user's current `pane-border-status` (only turn it on, at `top`, if it was `off`). |
 | `@minimize-marker-style` | `flat` | `flat` (transparent chevrons in the border colour) or `pill` (rounded coloured cap). |
-| `@minimize-marker-left-format` | `#[align=left] #{pane_index} ` | what every pane's border shows left of the marker. Set `''` for a marker-only border. |
+| `@minimize-marker-left-format` | the existing `pane-border-format` | what every pane's border shows left of the marker. Defaults to whatever `pane-border-format` already was (the plugin *augments* rather than replaces it). Set explicitly to e.g. `#[align=left] #{pane_index} ` for an index-only border, or `''` for marker-only. |
 | `@minimize-marker-format` | *(computed)* | override the whole minimized-pane marker string. |
 | `@minimize-marker-icon` / `-icon-active` | chevrons | the inward/outward glyph pair. |
 | `@minimize-marker-icon-color` | `default` (flat) / `cutout` (pill) | chevron colour; `auto` picks black/white by pill luminance, or an explicit colour. |
@@ -55,6 +55,8 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 | `@minimize_dashboard` | pane | dashboard ENTER | dashboard EXIT (which panes WE minimized) | flags panes minimized *by* dashboard so user-minimized panes survive the round trip. Cleared on EXIT. |
 | `@minimize_dashboard_layout` | window | dashboard ENTER | dashboard EXIT (verbatim restore) | the exact `window_layout` saved on ENTER; unset on EXIT. |
 | `@minimize_guard` | global | `apply`, `dashboard` | the `after-resize-pane` hooks | transient mutex flag: set while the plugin runs its own `select-layout`/`resize-pane` so the resize hooks don't mistake them for a user resize. |
+| `@minimize_orig_format` | global | `pane-minimize.tmux` at load (once) | same | the user's `pane-border-format` captured before the marker was first appended, so reloads re-augment from the original instead of doubling the marker. |
+| `@minimize_marker_installed` | global | `pane-minimize.tmux` at load (once) | same | guard so `@minimize_orig_format` is captured exactly once across reloads. |
 
 ### The pure transform's inputs
 
