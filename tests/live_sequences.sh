@@ -314,6 +314,21 @@ part_dashboard() {
     ok "p5 pre-minimized pane still minimized after exit"
   else bad "p5 pre-minimized pane lost its minimized state"; fi
   assert_live "p5 pre-minimized preserved"
+
+  # Zoom is preserved across a dashboard round trip: the verbatim restore goes through
+  # _rezoom (shared with apply()), so zooming the active pane inside the dashboard view
+  # and then exiting must keep the window zoomed.
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0                          # 3 panes
+  act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
+  bash "$ENGINE" dashboard "$act"        # enter dashboard
+  T resize-pane -Z -t "$act"             # zoom the active pane while in the dashboard view
+  [ "$(T display-message -p '#{window_zoomed_flag}')" = 1 ] || bad "p5 setup: zoom did not take"
+  bash "$ENGINE" dashboard "$act"        # exit dashboard -> should re-zoom
+  if [ "$(T display-message -p '#{window_zoomed_flag}')" = 1 ]; then
+    ok "p5 zoom preserved across dashboard round trip"
+  else bad "p5 lost zoom on dashboard exit"; fi
 }
 
 # --- Part 6: tmux-resurrect persistence (save-state/restore-state) -----------

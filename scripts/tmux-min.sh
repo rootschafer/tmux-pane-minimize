@@ -92,10 +92,15 @@ EOF
   case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
   new=$(transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh")
   tmux select-layout -t "$win" "$new" \; set-option -gu @minimize_guard
-  # select-layout un-zooms the window. Preserve zoom (so a repin from a terminal resize,
-  # or minimizing a background pane, doesn't kick you out of a zoom) — unless the active
-  # pane itself just got minimized, where staying unzoomed is correct.
-  [ "$zoomed" = 1 ] && [ "$actmin" != 1 ] && [ -n "$actpane" ] && tmux resize-pane -Z -t "$actpane"
+  _rezoom "$zoomed" "$actpane" "$actmin"
+}
+
+# select-layout un-zooms the window. Re-zoom the active pane so a repin (terminal resize
+# while zoomed), a background minimize, or a dashboard restore doesn't kick you out of a
+# zoom — unless the active pane itself was the one minimized, where staying unzoomed is
+# correct. Shared by apply() and dashboard() so both preserve zoom identically.
+_rezoom() {  # $1 was-zoomed  $2 active-pane-id  $3 active-pane-was-minimized
+  [ "$1" = 1 ] && [ "$3" != 1 ] && [ -n "$2" ] && tmux resize-pane -Z -t "$2"
 }
 
 toggle_pane() {
@@ -213,7 +218,7 @@ reset_minh() {
 #    saved layout verbatim, so panes return to their exact prior sizes. Falls back to a
 #    normal recompute if the saved layout no longer fits (a pane was added/closed).
 dashboard() {
-  local pane="$1" win active saved id
+  local pane="$1" win active saved id dz dap dam
   win=$(tmux display-message -p -t "$pane" '#{window_id}')
   _lock "$win"
   tmux set-option -g @minimize_guard 1
@@ -229,7 +234,18 @@ dashboard() {
 $(tmux list-panes -t "$win" -F '#{?@minimize_dashboard,#{pane_id},}')
 EOF
     tmux set-option -wu @minimize_dashboard_layout
-    tmux select-layout -t "$win" "$saved" 2>/dev/null || apply "$win"
+    # Restore the exact prior layout verbatim (NOT via apply()'s recompute, which would
+    # re-derive sizes). Read zoom + active-pane state in one call so we can preserve zoom
+    # the same way apply() does. Fall back to a recompute if the saved layout no longer
+    # fits (a pane was added/closed). The guard is held throughout, so the rezoom's
+    # resize-pane can't trip the after-resize hook.
+    IFS='|' read -r dz dap dam <<<"$(tmux display-message -p -t "$win" \
+      '#{window_zoomed_flag}|#{pane_id}|#{?@minimize_active,1,0}')"
+    if tmux select-layout -t "$win" "$saved" 2>/dev/null; then
+      _rezoom "$dz" "$dap" "$dam"
+    else
+      apply "$win"
+    fi
   else
     active=$(tmux display-message -p -t "$pane" '#{pane_id}')
     tmux set-option -w @minimize_dashboard_layout "$(tmux display-message -p -t "$win" '#{window_layout}')"
