@@ -7,16 +7,24 @@ the tests, and the techniques that make developing a tmux plugin tractable.
 
 ```
 pane-minimize.tmux       TPM entry point: reads @minimize-* options, binds keys, sets hooks
-scripts/tmux-min.sh      the engine — layout-tree transform + all subcommands
+scripts/transform.sh     the PURE layer — layout-tree parse/recompute/reconcile/serialize
+scripts/tmux-min.sh      the tmux-IO layer — sources transform.sh; all subcommands + apply
+scripts/marker.sh        the border-marker builder (build_marker -> MARKER_FMT)
+STATE.md                 the single state model — every @minimize-* / @minimize_* option
 tests/                   the test harness (see tests/README.md)
 .github/workflows/ci.yml CI: macOS + ubuntu
 ```
 
-The engine is the heart of it. `transform()` is a **pure function** of
-`(layout, MINSET, SAVEDW, WPANE, WVAL, MINH)` — no tmux, no time, no randomness — which
-is what makes the bulk of the tests exhaustive and deterministic. Everything that *does*
-touch tmux (toggle/peek/dashboard/save-state/…) is a thin orchestration layer that reads
-state, calls `transform`, and applies the result with `select-layout`.
+The engine is split along its one real seam. `scripts/transform.sh` holds the heart:
+`transform()` is a **pure function** of `(layout, MINSET, SAVEDW, WPANE, WVAL, MINH)` —
+no tmux, no time, no randomness — which is what makes the bulk of the tests exhaustive
+and deterministic. (grep it: zero `tmux` calls.) `scripts/tmux-min.sh` sources it and is
+the thin orchestration layer: everything that touches tmux (toggle/peek/dashboard/
+save-state/…) reads state, calls `transform`, and applies the result with `select-layout`.
+The two halves are physically separate so the purity boundary can't quietly erode.
+
+See **STATE.md** for the option model (the `@minimize-*` config vs `@minimize_*` runtime
+convention, and each option's scope/writer/reader/lifecycle).
 
 ## Hard constraint: macOS bash 3.2
 
@@ -41,7 +49,7 @@ VERBOSE=1 tests/run.sh  # also print every passing assertion
 /bin/bash tests/assert_layout.sh '<cs,geom>'   # check one layout string by hand
 
 # lint
-shellcheck -s bash -S warning scripts/tmux-min.sh pane-minimize.tmux tests/*.sh
+shellcheck -s bash -S warning scripts/*.sh pane-minimize.tmux tests/*.sh
 ```
 
 The **offline** suite is the one to lean on: it's pure and fast-ish, and it has caught
