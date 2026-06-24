@@ -39,12 +39,12 @@ jobs:
 
       - name: Syntax check (bash -n)
         run: |
-          for f in scripts/tmux-min.sh pane-minimize.tmux tests/*.sh; do
+          for f in scripts/*.sh pane-minimize.tmux tests/*.sh; do
             /bin/bash -n "$f"
           done
 
       - name: ShellCheck (warning severity)
-        run: shellcheck -s bash -S warning scripts/tmux-min.sh pane-minimize.tmux tests/*.sh
+        run: shellcheck -s bash -S warning scripts/*.sh pane-minimize.tmux tests/*.sh
 
       - name: Offline property suite + live suite
         env:

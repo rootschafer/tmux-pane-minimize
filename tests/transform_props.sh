@@ -103,6 +103,28 @@ run_subsets() {
   done
 }
 
+# Edge/robustness sweep: malformed or unusual layout strings must NOT crash the parser.
+# Regression for the `NT[$id]: unbound variable` bug — when parse_cell met a cell whose
+# next char was neither ',' nor '{'/'[' it left NT[$id] unset, and `${NT[$id]}` then
+# CRASHED under `set -u` on bash 4.4+/5.x (bash 3.2 read it as empty, so it hid locally
+# while CI on newer bash failed). We only assert no-crash (subshell exits 0) + non-empty
+# output; the geometry of a degraded/malformed input may be imperfect, which reconcile +
+# select-layout tolerate. transform() runs in the $(...) subshell, so a set -u abort exits
+# THAT subshell (rc!=0 / empty out), not this script.
+edge_cases() {
+  local layout out rc
+  for layout in \
+    '0000,80x24,0,0' \
+    '0000,80x24,0,0,' \
+    '0000,1x1,0,0,1' \
+    '0000,5x5,0,0[5x2,0,0,1,5x2,0,3,2]' \
+    '0000,80x24,0,0{40x24,0,0,1,39x24,41,0,2}' ; do
+    out=$(transform "$layout" " 1 2 " 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && [ -n "$out" ]; then ok "edge no-crash: $layout"
+    else bad "edge CRASH (rc=$rc) under set -u on: $layout -> [$out]"; fi
+  done
+}
+
 main() {
   local lay leaves
   while IFS="$(printf '\t')" read -r lay leaves; do
@@ -114,6 +136,7 @@ main() {
     BORDER_POS=bottom; run_subsets "$lay" "$leaves" 1
   done < <(/bin/bash "$TP_DIR/gen_layouts.sh")
   BORDER_POS=off
+  edge_cases
   summary "transform_props (offline)"
 }
 

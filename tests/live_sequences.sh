@@ -160,7 +160,7 @@ s2 s3 s1 m2 s2 s1 r'
       assert_live "p2 seq$idx step$i ($op)"
     done
   done
-  : "$panes"  # silence unused in some shells
+  : "${panes:-}"  # documents the 1/2/3 index mapping; assigned in the subshell above
 }
 
 # --- Part 3: race exposer ---------------------------------------------------

@@ -45,7 +45,13 @@ parse_cell() {
   _read_int; h=$RINT; POS=$((POS+1))
   _read_int; x=$RINT; POS=$((POS+1))
   _read_int; y=$RINT
-  NW[$id]=$w; NH[$id]=$h; NX[$id]=$x; NY[$id]=$y; NC[$id]=""; NP[$id]=""
+  # Default NT to "leaf" up-front (like NC/NP default to ""). The if/elif below overrides it
+  # for real splits; a leaf re-confirms it. This guarantees NT[$id] is ALWAYS set, so a cell
+  # whose next char is neither ',' nor '{'/'[' (a malformed/edge layout, or one a different
+  # tmux version emits unexpectedly) degrades to a leaf instead of leaving NT unset — which
+  # `${NT[$id]}` then reads as an "unbound variable" CRASH under `set -u` on bash 4.4+/5.x
+  # (bash 3.2 was lenient, which is why this hid for so long).
+  NW[$id]=$w; NH[$id]=$h; NX[$id]=$x; NY[$id]=$y; NC[$id]=""; NP[$id]=""; NT[$id]="leaf"
   ch="${LS:$POS:1}"
   if [ "$ch" = "," ]; then
     POS=$((POS+1)); _read_int; NP[$id]=$RINT; NT[$id]="leaf"
