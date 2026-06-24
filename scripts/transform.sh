@@ -170,122 +170,136 @@ recompute() {
   NX[$id]=$X; NY[$id]=$Y; NW[$id]=$W; NH[$id]=$H
   case "${NT[$id]}" in
     leaf) ;;
-    h) # distribute WIDTH; every child spans full height H at row Y.
-       local kids="${NC[$id]}" n avail c fw flexsum rest assigned last xx cw allfix fl i
-       local -a hSZ hCID
-       set -- $kids; n=$#
-       avail=$(( W - (n - 1) ))
-       flexsum=0; assigned=0; last=""
-       for c in $kids; do
-         _fixed_width "$c"; fw=$RET
-         if [ "$fw" -ge 0 ]; then assigned=$(( assigned + fw ))
-         else flexsum=$(( flexsum + NW[c] )); last=$c; fi
-       done
-       # If EVERY child is fixed-width (e.g. all columns fully minimized) there is no
-       # flexible neighbour to absorb the freed width. Don't strand it: treat every
-       # child as flexible and distribute the FULL row width proportionally by original
-       # width, with the last child taking the remainder so the row sum stays exact.
-       # (The old code reused `rest` = avail-fixed and had no remainder pane, so it
-       # lost ~sum(MIN_W) columns -> a malformed layout tmux silently squished.)
-       allfix=0
-       if [ -z "$last" ]; then
-         allfix=1; flexsum=0
-         for c in $kids; do flexsum=$(( flexsum + NW[c] )); last=$c; done
-         rest=$avail
-       else
-         rest=$(( avail - assigned )); [ "$rest" -lt 0 ] && rest=0
-       fi
-       [ "$flexsum" -le 0 ] && flexsum=1
-       # collect each child's width + a "flexible" flag (fixed columns -> 0)
-       assigned=0; i=0
-       for c in $kids; do
-         _fixed_width "$c"; fw=$RET
-         if [ "$allfix" != 1 ] && [ "$fw" -ge 0 ]; then cw=$fw; fl=0
-         elif [ "$c" = "$last" ]; then cw=$(( rest - assigned )); [ "$cw" -lt 1 ] && cw=1; fl=1
-         else cw=$(( NW[c] * rest / flexsum )); [ "$cw" -lt 1 ] && cw=1; assigned=$(( assigned + cw )); fl=1; fi
-         RC_SZ[$i]=$cw; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; i=$((i+1))
-       done
-       RC_N=$n; RC_AVAIL=$avail; reconcile
-       hSZ=( "${RC_SZ[@]}" ); hCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
-       xx=$X; i=0
-       while [ "$i" -lt "$n" ]; do
-         recompute "${hCID[$i]}" "$xx" "$Y" "${hSZ[$i]}" "$H" "$ot" "$ob"
-         xx=$(( xx + hSZ[i] + 1 )); i=$((i+1))
-       done ;;
-    v) # distribute HEIGHT; every child spans full width W at column X.
-       local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
-       local rcount rtgt rfix isr first lastp cap rpresent fl eb
-       local -a vSZ vCID vOT vOB
-       set -- $kids; n=$#
-       avail=$(( H - (n - 1) ))
-       wsum=0; for c in $kids; do wants_min "$c"; [ "$RET" = 0 ] && wsum=$((wsum+1)); done
-       allmin=0; [ "$wsum" -eq 0 ] && allmin=1   # whole stack minimized: fill height proportionally
-       # The "restore pane" (#{WPANE}, saved height WVAL) is the pane being
-       # un-minimized or peeked. Pin it to its EXACT saved height (like minimized
-       # panes are pinned to MIN_H) so it returns to its prior size instead of a
-       # skewed proportional share — but only when another flexible pane exists to
-       # absorb the remainder; otherwise it stays the flexible pane that fills.
-       # pass 0: minimized fixed height (fixmin) and count of other flex panes.
-       fixmin=0; rcount=0; rpresent=0; i=0
-       for c in $kids; do
-         first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
-         wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
-         if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; fixmin=$(( fixmin + RET + eb ))
-         elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
-           rpresent=1   # the restore pane is a direct child of THIS vertical node
-         else rcount=$(( rcount + 1 )); fi
-         i=$((i+1))
-       done
-       # Pin the restore pane to its saved height only when it is actually in this node
-       # AND another flex pane can absorb the freed space. (rpresent guards against a
-       # sibling column reserving height for a restore pane that isn't in it.)
-       rfix=0; rtgt=0
-       if [ "$rpresent" = 1 ] && [ "$rcount" -ge 1 ]; then
-         rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
-         cap=$(( avail - fixmin - rcount )); [ "$rtgt" -gt "$cap" ] && rtgt=$cap   # leave >=1 per flex pane
-         [ "$rtgt" -lt 1 ] && rtgt=1
-       fi
-       fixed=$fixmin; [ "$rfix" = 1 ] && fixed=$(( fixed + rtgt ))
-       # pass 1: flex weight sum (flex = non-min, and not the pinned restore pane)
-       wsum=0; last=""; i=0
-       for c in $kids; do
-         wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
-         isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
-         if [ "$wm" != 1 ] && [ "$isr" != 1 ]; then
-           weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
-           wsum=$(( wsum + weight )); last=$c
-         fi
-         i=$((i+1))
-       done
-       rest=$(( avail - fixed )); [ "$rest" -lt 0 ] && rest=0
-       [ "$wsum" -le 0 ] && wsum=1
-       # pass 2: collect each child's height + flex flag + edge flags, then reconcile.
-       # flex (fl=1) = proportional pane; minimized + pinned-restore panes are fl=0 so
-       # reconcile preserves their MIN_H / saved height unless the window can't afford it.
-       assigned=0; i=0
-       for c in $kids; do
-         otc=0; obc=0; [ "$i" -eq 0 ] && otc=$ot; [ "$i" -eq $((n-1)) ] && obc=$ob
-         first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
-         wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
-         isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
-         if [ "$wm" = 1 ]; then
-           _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; hc=$(( RET + eb )); fl=0
-         elif [ "$isr" = 1 ]; then hc=$rtgt; fl=0
-         elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1; fl=1
-         else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
-              hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fl=1; fi
-         RC_SZ[$i]=$hc; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; vOT[$i]=$otc; vOB[$i]=$obc
-         i=$((i+1))
-       done
-       RC_N=$n; RC_AVAIL=$avail; reconcile
-       vSZ=( "${RC_SZ[@]}" ); vCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
-       yy=$Y; i=0
-       while [ "$i" -lt "$n" ]; do
-         recompute "${vCID[$i]}" "$X" "$yy" "$W" "${vSZ[$i]}" "${vOT[$i]}" "${vOB[$i]}"
-         yy=$(( yy + vSZ[i] + 1 )); i=$((i+1))
-       done ;;
+    h) _recompute_h "$id" "$X" "$Y" "$W" "$H" "$ot" "$ob" ;;
+    v) _recompute_v "$id" "$X" "$Y" "$W" "$H" "$ot" "$ob" ;;
   esac
+}
+
+# _recompute_h: distribute WIDTH among a horizontal split's children; every child
+# spans the full height H at row Y. (Body extracted from recompute's `h)` branch.)
+_recompute_h() {
+  local id=$1 X=$2 Y=$3 W=$4 H=$5 ot=$6 ob=$7
+  local kids="${NC[$id]}" n avail c fw flexsum rest assigned last xx cw allfix fl i
+  local -a hSZ hCID
+  set -- $kids; n=$#
+  avail=$(( W - (n - 1) ))
+  flexsum=0; assigned=0; last=""
+  for c in $kids; do
+    _fixed_width "$c"; fw=$RET
+    if [ "$fw" -ge 0 ]; then assigned=$(( assigned + fw ))
+    else flexsum=$(( flexsum + NW[c] )); last=$c; fi
+  done
+  # If EVERY child is fixed-width (e.g. all columns fully minimized) there is no
+  # flexible neighbour to absorb the freed width. Don't strand it: treat every
+  # child as flexible and distribute the FULL row width proportionally by original
+  # width, with the last child taking the remainder so the row sum stays exact.
+  # (The old code reused `rest` = avail-fixed and had no remainder pane, so it
+  # lost ~sum(MIN_W) columns -> a malformed layout tmux silently squished.)
+  allfix=0
+  if [ -z "$last" ]; then
+    allfix=1; flexsum=0
+    for c in $kids; do flexsum=$(( flexsum + NW[c] )); last=$c; done
+    rest=$avail
+  else
+    rest=$(( avail - assigned )); [ "$rest" -lt 0 ] && rest=0
+  fi
+  [ "$flexsum" -le 0 ] && flexsum=1
+  # collect each child's width + a "flexible" flag (fixed columns -> 0)
+  assigned=0; i=0
+  for c in $kids; do
+    _fixed_width "$c"; fw=$RET
+    if [ "$allfix" != 1 ] && [ "$fw" -ge 0 ]; then cw=$fw; fl=0
+    elif [ "$c" = "$last" ]; then cw=$(( rest - assigned )); [ "$cw" -lt 1 ] && cw=1; fl=1
+    else cw=$(( NW[c] * rest / flexsum )); [ "$cw" -lt 1 ] && cw=1; assigned=$(( assigned + cw )); fl=1; fi
+    RC_SZ[$i]=$cw; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; i=$((i+1))
+  done
+  RC_N=$n; RC_AVAIL=$avail; reconcile
+  hSZ=( "${RC_SZ[@]}" ); hCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
+  xx=$X; i=0
+  while [ "$i" -lt "$n" ]; do
+    recompute "${hCID[$i]}" "$xx" "$Y" "${hSZ[$i]}" "$H" "$ot" "$ob"
+    xx=$(( xx + hSZ[i] + 1 )); i=$((i+1))
+  done
+}
+
+# _recompute_v: distribute HEIGHT among a vertical split's children; every child
+# spans the full width W at column X. This is where minimized panes get pinned to
+# MIN_H and the un-minimize/peek restore pane to its saved height. (Body extracted
+# from recompute's `v)` branch.)
+_recompute_v() {
+  local id=$1 X=$2 Y=$3 W=$4 H=$5 ot=$6 ob=$7
+  local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
+  local rcount rtgt rfix isr first lastp cap rpresent fl eb
+  local -a vSZ vCID vOT vOB
+  set -- $kids; n=$#
+  avail=$(( H - (n - 1) ))
+  wsum=0; for c in $kids; do wants_min "$c"; [ "$RET" = 0 ] && wsum=$((wsum+1)); done
+  allmin=0; [ "$wsum" -eq 0 ] && allmin=1   # whole stack minimized: fill height proportionally
+  # The "restore pane" (#{WPANE}, saved height WVAL) is the pane being
+  # un-minimized or peeked. Pin it to its EXACT saved height (like minimized
+  # panes are pinned to MIN_H) so it returns to its prior size instead of a
+  # skewed proportional share — but only when another flexible pane exists to
+  # absorb the remainder; otherwise it stays the flexible pane that fills.
+  # pass 0: minimized fixed height (fixmin) and count of other flex panes.
+  fixmin=0; rcount=0; rpresent=0; i=0
+  for c in $kids; do
+    first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
+    wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
+    if [ "$wm" = 1 ]; then
+      _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; fixmin=$(( fixmin + RET + eb ))
+    elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
+      rpresent=1   # the restore pane is a direct child of THIS vertical node
+    else rcount=$(( rcount + 1 )); fi
+    i=$((i+1))
+  done
+  # Pin the restore pane to its saved height only when it is actually in this node
+  # AND another flex pane can absorb the freed space. (rpresent guards against a
+  # sibling column reserving height for a restore pane that isn't in it.)
+  rfix=0; rtgt=0
+  if [ "$rpresent" = 1 ] && [ "$rcount" -ge 1 ]; then
+    rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
+    cap=$(( avail - fixmin - rcount )); [ "$rtgt" -gt "$cap" ] && rtgt=$cap   # leave >=1 per flex pane
+    [ "$rtgt" -lt 1 ] && rtgt=1
+  fi
+  fixed=$fixmin; [ "$rfix" = 1 ] && fixed=$(( fixed + rtgt ))
+  # pass 1: flex weight sum (flex = non-min, and not the pinned restore pane)
+  wsum=0; last=""; i=0
+  for c in $kids; do
+    wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
+    isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
+    if [ "$wm" != 1 ] && [ "$isr" != 1 ]; then
+      weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
+      wsum=$(( wsum + weight )); last=$c
+    fi
+    i=$((i+1))
+  done
+  rest=$(( avail - fixed )); [ "$rest" -lt 0 ] && rest=0
+  [ "$wsum" -le 0 ] && wsum=1
+  # pass 2: collect each child's height + flex flag + edge flags, then reconcile.
+  # flex (fl=1) = proportional pane; minimized + pinned-restore panes are fl=0 so
+  # reconcile preserves their MIN_H / saved height unless the window can't afford it.
+  assigned=0; i=0
+  for c in $kids; do
+    otc=0; obc=0; [ "$i" -eq 0 ] && otc=$ot; [ "$i" -eq $((n-1)) ] && obc=$ob
+    first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
+    wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
+    isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
+    if [ "$wm" = 1 ]; then
+      _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; hc=$(( RET + eb )); fl=0
+    elif [ "$isr" = 1 ]; then hc=$rtgt; fl=0
+    elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1; fl=1
+    else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
+         hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fl=1; fi
+    RC_SZ[$i]=$hc; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; vOT[$i]=$otc; vOB[$i]=$obc
+    i=$((i+1))
+  done
+  RC_N=$n; RC_AVAIL=$avail; reconcile
+  vSZ=( "${RC_SZ[@]}" ); vCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
+  yy=$Y; i=0
+  while [ "$i" -lt "$n" ]; do
+    recompute "${vCID[$i]}" "$X" "$yy" "$W" "${vSZ[$i]}" "${vOT[$i]}" "${vOB[$i]}"
+    yy=$(( yy + vSZ[i] + 1 )); i=$((i+1))
+  done
 }
 
 serialize() {
