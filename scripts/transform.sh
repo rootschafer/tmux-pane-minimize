@@ -235,7 +235,7 @@ _recompute_h() {
 _recompute_v() {
   local id=$1 X=$2 Y=$3 W=$4 H=$5 ot=$6 ob=$7
   local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
-  local rcount rtgt rfix isr first lastp cap rpresent fl eb
+  local rcount rtgt rfix isr first lastp cap rpresent fl eb flexw pshare rest0
   local -a vSZ vCID vOT vOB
   set -- $kids; n=$#
   avail=$(( H - (n - 1) ))
@@ -246,8 +246,9 @@ _recompute_v() {
   # panes are pinned to MIN_H) so it returns to its prior size instead of a
   # skewed proportional share — but only when another flexible pane exists to
   # absorb the remainder; otherwise it stays the flexible pane that fills.
-  # pass 0: minimized fixed height (fixmin) and count of other flex panes.
-  fixmin=0; rcount=0; rpresent=0; i=0
+  # pass 0: minimized fixed height (fixmin), count of other flex panes (rcount), and their
+  # total height weight (flexw — used to keep the restore pane from squishing them).
+  fixmin=0; rcount=0; rpresent=0; flexw=0; i=0
   for c in $kids; do
     first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
     wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
@@ -255,7 +256,7 @@ _recompute_v() {
       _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; fixmin=$(( fixmin + RET + eb ))
     elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
       rpresent=1   # the restore pane is a direct child of THIS vertical node
-    else rcount=$(( rcount + 1 )); fi
+    else rcount=$(( rcount + 1 )); flexw=$(( flexw + NH[c] )); fi
     i=$((i+1))
   done
   # Pin the restore pane to its saved height only when it is actually in this node
@@ -264,7 +265,21 @@ _recompute_v() {
   rfix=0; rtgt=0
   if [ "$rpresent" = 1 ] && [ "$rcount" -ge 1 ]; then
     rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
-    cap=$(( avail - fixmin - rcount )); [ "$rtgt" -gt "$cap" ] && rtgt=$cap   # leave >=1 per flex pane
+    # Cap the restore height at its PROPORTIONAL share of the space it splits with the flex
+    # panes (weights = saved height vs the flex panes' heights). A modest saved height stays
+    # EXACT (it's below its proportional share); a large/stale one degrades to proportional
+    # so a genuine flex pane keeps a fair share instead of collapsing to 1 row. Only cap when
+    # the share is still >= MIN_H, so un-minimizing a small pane never drops below MIN_H.
+    rest0=$(( avail - fixmin )); [ "$rest0" -lt 1 ] && rest0=1
+    [ "$flexw" -lt 1 ] && flexw=1
+    pshare=$(( WVAL * rest0 / (WVAL + flexw) ))
+    [ "$rtgt" -gt "$pshare" ] && [ "$pshare" -ge "$MIN_H" ] && rtgt=$pshare
+    # hard cap: leave each flex pane at least MIN_H when the window can afford it (so even a
+    # pathological stale saved height can't squeeze a flex pane below MIN_H); fall back to
+    # leaving >=1 each only when the window is too small for that.
+    cap=$(( avail - fixmin - rcount * MIN_H ))
+    [ "$cap" -lt "$MIN_H" ] && cap=$(( avail - fixmin - rcount ))
+    [ "$rtgt" -gt "$cap" ] && rtgt=$cap
     [ "$rtgt" -lt 1 ] && rtgt=1
   fi
   fixed=$fixmin; [ "$rfix" = 1 ] && fixed=$(( fixed + rtgt ))

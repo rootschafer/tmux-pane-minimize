@@ -125,6 +125,25 @@ edge_cases() {
   done
 }
 
+# Regression: a genuine flex pane (never minimized, and not the restore/peek pane) must keep
+# a FAIR share when a restore pane has a large/stale saved height — it must not collapse below
+# MIN_H while the window can afford it. This is the "non-minimized pane in a mostly-minimized
+# column squished to ~1 row" bug. gen_layouts stops at 4 leaves, so 5+-pane columns (where it
+# shows up) aren't otherwise exercised.
+restore_fairness() {
+  local L out h wval
+  L="0000,100x50,0,0[100x10,0,0,0,100x9,0,11,1,100x9,0,21,2,100x9,0,31,3,100x9,0,41,4]"
+  for wval in 6 20 40 1000; do
+    out=$(transform "$L" " 0 1 3 " " " 4 "$wval" " ")    # 0,1,3 minimized; 2 flex; 4 = restore
+    h=$(printf '%s' "$out" | grep -oE "100x[0-9]+,0,[0-9]+,2," | grep -oE "x[0-9]+" | tr -d x)
+    if check_layout "$out" && [ -n "$h" ] && [ "$h" -ge "$MIN_H" ]; then
+      ok "restore fairness: flex pane keeps >=MIN_H vs restore wval=$wval (h=$h)"
+    else
+      bad "restore fairness: flex pane collapsed (wval=$wval h=$h) :: $out"
+    fi
+  done
+}
+
 main() {
   local lay leaves
   while IFS="$(printf '\t')" read -r lay leaves; do
@@ -137,6 +156,7 @@ main() {
   done < <(/bin/bash "$TP_DIR/gen_layouts.sh")
   BORDER_POS=off
   edge_cases
+  restore_fairness
   summary "transform_props (offline)"
 }
 
