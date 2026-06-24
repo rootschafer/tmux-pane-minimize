@@ -300,20 +300,32 @@ save_state() {
     | grep -v '^$' > "$f" 2>/dev/null || true
 }
 restore_state() {
-  local f="${1:-}" sess win pane saved savedw minh tgt w wins=""
+  local f="${1:-}" sess win pane saved savedw minh tgt wid k v w wins="" panemap
+  local -a cmd
   [ -z "$f" ] && f=$(_state_file)
   [ -f "$f" ] || return 0
+  # Read every live pane ONCE into a "target|window_id" table, so each saved entry is
+  # resolved (does the pane still exist? which window?) by an in-shell lookup instead of
+  # two display-message round-trips per entry. Then set all the per-pane options in ONE
+  # chained tmux call (same coalescing as dashboard()).
+  panemap=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{window_id}' 2>/dev/null || true)
+  cmd=()
   while IFS='	' read -r sess win pane saved savedw minh; do
     [ -z "$sess" ] && continue
     tgt="${sess}:${win}.${pane}"
-    tmux display-message -p -t "$tgt" '#{pane_id}' >/dev/null 2>&1 || continue
-    tmux set-option -t "$tgt" -p @minimize_active 1
-    case "$saved"  in ''|*[!0-9]*) ;; *) tmux set-option -t "$tgt" -p @minimize_saved   "$saved"  ;; esac
-    case "$savedw" in ''|*[!0-9]*) ;; *) tmux set-option -t "$tgt" -p @minimize_saved_w "$savedw" ;; esac
-    case "$minh"   in ''|*[!0-9]*) ;; *) tmux set-option -t "$tgt" -p @minimize_minh    "$minh"   ;; esac
-    w=$(tmux display-message -p -t "$tgt" '#{window_id}')
-    case " $wins " in *" $w "*) ;; *) wins="$wins $w" ;; esac
+    wid=""
+    while IFS='|' read -r k v; do [ "$k" = "$tgt" ] && { wid="$v"; break; }; done <<EOF
+$panemap
+EOF
+    [ -z "$wid" ] && continue          # a pane from the saved state no longer exists
+    [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+    cmd+=( set-option -t "$tgt" -p @minimize_active 1 )
+    case "$saved"  in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved   "$saved"  ) ;; esac
+    case "$savedw" in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved_w "$savedw" ) ;; esac
+    case "$minh"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minh    "$minh"   ) ;; esac
+    case " $wins " in *" $wid "*) ;; *) wins="$wins $wid" ;; esac
   done < "$f"
+  [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
   for w in $wins; do
     _lock "$w"; apply "$w"; _unlock
   done
