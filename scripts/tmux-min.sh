@@ -24,11 +24,14 @@ _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=/dev/null
 . "$_DIR/transform.sh"
 
-# Read both size options in ONE tmux round-trip (this runs on every engine invocation),
+# Read the size options in ONE tmux round-trip (this runs on every engine invocation),
 # overriding transform.sh's defaults.
-IFS='|' read -r MIN_H MIN_W <<<"$(tmux display-message -p '#{@minimize-height}|#{@minimize-width}' 2>/dev/null || true)"
+IFS='|' read -r MIN_H MIN_W ABS_MIN_H <<<"$(tmux display-message -p '#{@minimize-height}|#{@minimize-width}|#{@minimize-absolute-min-height}' 2>/dev/null || true)"
 case "$MIN_H" in ''|*[!0-9]*) MIN_H=3 ;; esac
 case "$MIN_W" in ''|*[!0-9]*) MIN_W=30 ;; esac
+case "$ABS_MIN_H" in ''|*[!0-9]*) ABS_MIN_H=1 ;; esac
+[ "$ABS_MIN_H" -lt 1 ] && ABS_MIN_H=1
+[ "$ABS_MIN_H" -gt "$MIN_H" ] && ABS_MIN_H=$MIN_H   # the floor can't exceed the comfortable height
 
 # ---- per-window mutex (atomic mkdir; portable — macOS has no flock) ----
 # The focus/resize hooks invoke this engine with `run-shell -b`, so several copies

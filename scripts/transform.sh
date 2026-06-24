@@ -18,14 +18,16 @@
 # No tmux command must ever run from this file (the word appears in comments only). Keep it pure.
 set -u
 
-# Defaults; the tmux-IO layer overrides these from @minimize-height / @minimize-width.
-MIN_H="${MIN_H:-3}"
-MIN_W="${MIN_W:-30}"
+# Defaults; the tmux-IO layer overrides these from @minimize-* options.
+MIN_H="${MIN_H:-3}"          # comfortable minimized height (rows) when there's room
+MIN_W="${MIN_W:-30}"         # width a fully-minimized column narrows to
+ABS_MIN_H="${ABS_MIN_H:-1}"  # absolute floor: a minimized pane never shrinks below this
+                             # (rows of content) when squeezed to fit a peek/expansion
 
 # ---- layout tree (parallel arrays; node = index) ----
 LS=""; POS=0; NN=0
 declare -a NT NW NH NX NY NP NC WM FM
-declare -a RC_SZ RC_FLEX RC_CID   # reconcile scratch (transient; copied to locals before recursion)
+declare -a RC_SZ RC_FLEX RC_CID RC_FLOOR RC_MIN   # reconcile scratch (transient; copied to locals before recursion)
 RC_N=0; RC_AVAIL=0
 MINSET=" "          # " 1 4 7 " minimized pane numbers
 SAVEDW=" "          # " 1:80 4:80 " pane-number:saved-width (pre-narrow widths)
@@ -134,17 +136,22 @@ _fixed_width() {
   RET=-1
 }
 
-# reconcile: force RC_SZ[0..RC_N-1] to sum EXACTLY to RC_AVAIL with every entry >=1.
-# This is the safety net that guarantees a split's children always tile their parent
-# no matter what the size logic produced (tiny window where MIN_H/MIN_W can't fit,
-# a stale @minimize_saved/_w larger than the now-smaller window, a degenerate WVAL).
-# Without it the engine can emit a layout whose children don't sum to the parent, and
-# tmux SILENTLY applies it — squishing a pane toward zero. Surplus goes to a flexible
-# child; a deficit is shaved off the tallest (flexible first) so minimized panes keep
-# MIN_H whenever the window can afford it. No-op when sizes already sum exactly.
+# reconcile: force RC_SZ[0..RC_N-1] to sum EXACTLY to RC_AVAIL, each entry >= its RC_FLOOR.
+# This is the safety net that guarantees a split's children always tile their parent no
+# matter what the size logic produced (tiny window, stale @minimize_saved/_w, degenerate
+# WVAL). Without it the engine can emit a layout whose children don't sum to the parent and
+# tmux SILENTLY applies it — squishing a pane toward zero.
+#
+# Per child the size logic supplies RC_FLOOR[i] (its minimum) and RC_MIN[i] (1 = a minimized
+# pane, which YIELDS first). Surplus goes to a flexible child. A deficit is shaved in tiers:
+# minimized panes (down to their floor) first, then flexible panes, then anything above its
+# floor, and only as a last resort below the floors — so a peek/expansion borrows space from
+# minimized panes (toward ABS_MIN_H) before the working/peek panes give anything up.
+# No-op when sizes already sum exactly. With RC_FLOOR=1 and RC_MIN=0 this is identical to the
+# original flex-first/floor-1 behaviour (the non-peek and horizontal paths).
 reconcile() {
   local i s delta best bi
-  i=0; while [ "$i" -lt "$RC_N" ]; do [ "${RC_SZ[$i]}" -lt 1 ] && RC_SZ[$i]=1; i=$((i+1)); done
+  i=0; while [ "$i" -lt "$RC_N" ]; do [ "${RC_SZ[$i]}" -lt "${RC_FLOOR[$i]}" ] && RC_SZ[$i]=${RC_FLOOR[$i]}; i=$((i+1)); done
   s=0; i=0; while [ "$i" -lt "$RC_N" ]; do s=$(( s + RC_SZ[i] )); i=$((i+1)); done
   delta=$(( RC_AVAIL - s ))
   if [ "$delta" -gt 0 ]; then
@@ -154,18 +161,30 @@ reconcile() {
   elif [ "$delta" -lt 0 ]; then
     delta=$(( -delta ))
     while [ "$delta" -gt 0 ]; do
-      best=0; bi=-1; i=0          # prefer the tallest FLEX child >1
+      best=0; bi=-1; i=0          # tier 1: tallest MINIMIZED pane above its floor (yield first)
       while [ "$i" -lt "$RC_N" ]; do
-        if [ "${RC_FLEX[$i]}" = 1 ] && [ "${RC_SZ[$i]}" -gt 1 ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
+        if [ "${RC_MIN[$i]}" = 1 ] && [ "${RC_SZ[$i]}" -gt "${RC_FLOOR[$i]}" ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
         i=$((i+1))
       done
-      if [ "$bi" -lt 0 ]; then    # none flexible left; shave the tallest fixed child >1
+      if [ "$bi" -lt 0 ]; then    # tier 2: tallest FLEX pane above its floor
+        i=0; while [ "$i" -lt "$RC_N" ]; do
+          if [ "${RC_FLEX[$i]}" = 1 ] && [ "${RC_SZ[$i]}" -gt "${RC_FLOOR[$i]}" ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
+          i=$((i+1))
+        done
+      fi
+      if [ "$bi" -lt 0 ]; then    # tier 3: tallest of anything above its floor
+        i=0; while [ "$i" -lt "$RC_N" ]; do
+          if [ "${RC_SZ[$i]}" -gt "${RC_FLOOR[$i]}" ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
+          i=$((i+1))
+        done
+      fi
+      if [ "$bi" -lt 0 ]; then    # last resort: tallest above 1, breaking floors (window can't fit n panes)
         i=0; while [ "$i" -lt "$RC_N" ]; do
           if [ "${RC_SZ[$i]}" -gt 1 ] && [ "${RC_SZ[$i]}" -gt "$best" ]; then best=${RC_SZ[$i]}; bi=$i; fi
           i=$((i+1))
         done
       fi
-      [ "$bi" -lt 0 ] && break     # everything already at 1: window can't fit n panes
+      [ "$bi" -lt 0 ] && break     # everything already at 1
       RC_SZ[$bi]=$(( RC_SZ[bi] - 1 )); delta=$(( delta - 1 ))
     done
   fi
@@ -217,7 +236,7 @@ _recompute_h() {
     if [ "$allfix" != 1 ] && [ "$fw" -ge 0 ]; then cw=$fw; fl=0
     elif [ "$c" = "$last" ]; then cw=$(( rest - assigned )); [ "$cw" -lt 1 ] && cw=1; fl=1
     else cw=$(( NW[c] * rest / flexsum )); [ "$cw" -lt 1 ] && cw=1; assigned=$(( assigned + cw )); fl=1; fi
-    RC_SZ[$i]=$cw; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; i=$((i+1))
+    RC_SZ[$i]=$cw; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; RC_FLOOR[$i]=1; RC_MIN[$i]=0; i=$((i+1))
   done
   RC_N=$n; RC_AVAIL=$avail; reconcile
   hSZ=( "${RC_SZ[@]}" ); hCID=( "${RC_CID[@]}" )   # copy out before recursion clobbers RC_*
@@ -235,7 +254,7 @@ _recompute_h() {
 _recompute_v() {
   local id=$1 X=$2 Y=$3 W=$4 H=$5 ot=$6 ob=$7
   local kids="${NC[$id]}" n i avail fixed fixmin wsum c weight hc rest assigned last yy wm otc obc allmin
-  local rcount rtgt rfix isr first lastp cap rpresent fl eb flexw pshare rest0
+  local rcount rtgt rfix isr first lastp cap rpresent fl eb fixf fill flo mn
   local -a vSZ vCID vOT vOB
   set -- $kids; n=$#
   avail=$(( H - (n - 1) ))
@@ -246,39 +265,34 @@ _recompute_v() {
   # panes are pinned to MIN_H) so it returns to its prior size instead of a
   # skewed proportional share — but only when another flexible pane exists to
   # absorb the remainder; otherwise it stays the flexible pane that fills.
-  # pass 0: minimized fixed height (fixmin), count of other flex panes (rcount), and their
-  # total height weight (flexw — used to keep the restore pane from squishing them).
-  fixmin=0; rcount=0; rpresent=0; flexw=0; i=0
+  # pass 0: minimized comfortable-height sum (fixmin) and floor-height sum (fixf, each at
+  # ABS_MIN_H + the same edge bonus), the minimized count (nmin), the count of genuine flex
+  # panes (rcount), and whether the restore/peek pane is a direct child here (rpresent).
+  fixmin=0; fixf=0; rcount=0; rpresent=0; i=0
   for c in $kids; do
     first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
     wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
     if [ "$wm" = 1 ]; then
-      _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; fixmin=$(( fixmin + RET + eb ))
+      _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"
+      fixmin=$(( fixmin + RET + eb )); fixf=$(( fixf + ABS_MIN_H + eb ))
     elif [ "${NT[$c]}" = "leaf" ] && [ -n "$WPANE" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$WVAL" -gt 0 ]; then
       rpresent=1   # the restore pane is a direct child of THIS vertical node
-    else rcount=$(( rcount + 1 )); flexw=$(( flexw + NH[c] )); fi
+    else rcount=$(( rcount + 1 )); fi
     i=$((i+1))
   done
-  # Pin the restore pane to its saved height only when it is actually in this node
-  # AND another flex pane can absorb the freed space. (rpresent guards against a
-  # sibling column reserving height for a restore pane that isn't in it.)
+  # The restore/peek pane (being un-minimized or focused) gets its saved height WVAL. It
+  # takes that space from the MINIMIZED panes, which may shrink from their comfortable MIN_H
+  # toward ABS_MIN_H — but no further: rtgt is capped so every minimized pane keeps at least
+  # its floor (fixf in total) and every genuine flex/working pane keeps at least MIN_H. Past
+  # that, the expansion just can't grow more. If it is the ONLY non-minimized pane here
+  # (rcount=0) it also fills any space above the minimized panes' comfortable heights.
+  # (rpresent guards against a sibling column reserving height for a pane that isn't in it.)
   rfix=0; rtgt=0
-  if [ "$rpresent" = 1 ] && [ "$rcount" -ge 1 ]; then
+  if [ "$rpresent" = 1 ]; then
     rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
-    # Cap the restore height at its PROPORTIONAL share of the space it splits with the flex
-    # panes (weights = saved height vs the flex panes' heights). A modest saved height stays
-    # EXACT (it's below its proportional share); a large/stale one degrades to proportional
-    # so a genuine flex pane keeps a fair share instead of collapsing to 1 row. Only cap when
-    # the share is still >= MIN_H, so un-minimizing a small pane never drops below MIN_H.
-    rest0=$(( avail - fixmin )); [ "$rest0" -lt 1 ] && rest0=1
-    [ "$flexw" -lt 1 ] && flexw=1
-    pshare=$(( WVAL * rest0 / (WVAL + flexw) ))
-    [ "$rtgt" -gt "$pshare" ] && [ "$pshare" -ge "$MIN_H" ] && rtgt=$pshare
-    # hard cap: leave each flex pane at least MIN_H when the window can afford it (so even a
-    # pathological stale saved height can't squeeze a flex pane below MIN_H); fall back to
-    # leaving >=1 each only when the window is too small for that.
-    cap=$(( avail - fixmin - rcount * MIN_H ))
-    [ "$cap" -lt "$MIN_H" ] && cap=$(( avail - fixmin - rcount ))
+    if [ "$rcount" -eq 0 ]; then fill=$(( avail - fixmin )); [ "$rtgt" -lt "$fill" ] && rtgt=$fill; fi
+    cap=$(( avail - fixf - rcount * MIN_H ))                      # leave minimized at floor + flex at MIN_H
+    [ "$cap" -lt "$MIN_H" ] && cap=$(( avail - fixf - rcount ))   # super tight: flex >=1 each
     [ "$rtgt" -gt "$cap" ] && rtgt=$cap
     [ "$rtgt" -lt 1 ] && rtgt=1
   fi
@@ -296,22 +310,28 @@ _recompute_v() {
   done
   rest=$(( avail - fixed )); [ "$rest" -lt 0 ] && rest=0
   [ "$wsum" -le 0 ] && wsum=1
-  # pass 2: collect each child's height + flex flag + edge flags, then reconcile.
-  # flex (fl=1) = proportional pane; minimized + pinned-restore panes are fl=0 so
-  # reconcile preserves their MIN_H / saved height unless the window can't afford it.
+  # pass 2: collect each child's height + flex flag + floor + minimized flag, then reconcile.
+  #  - minimized panes start at their comfortable height; their floor is ABS_MIN_H (+edge) and
+  #    they are flagged RC_MIN=1 so reconcile shrinks THEM first to feed a peek (only in the
+  #    peek case, rfix=1; otherwise floor stays 1 / RC_MIN=0 = original behaviour).
+  #  - the restore/peek pane (isr) is pinned to rtgt; when it is the sole non-min pane it also
+  #    absorbs surplus (fl=1) so it fills the column.
+  #  - genuine flex/working panes get floor MIN_H in the peek case so they stay usable.
   assigned=0; i=0
   for c in $kids; do
     otc=0; obc=0; [ "$i" -eq 0 ] && otc=$ot; [ "$i" -eq $((n-1)) ] && obc=$ob
     first=$([ $i -eq 0 ] && echo 1 || echo 0); lastp=$([ $i -eq $((n-1)) ] && echo 1 || echo 0)
     wants_min "$c"; wm=$RET; [ "$allmin" = 1 ] && wm=0
     isr=0; [ "$rfix" = 1 ] && [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && [ "$wm" = 0 ] && isr=1
+    flo=1; mn=0
     if [ "$wm" = 1 ]; then
       _edge_bonus 1 "$first" "$lastp" "$ot" "$ob"; eb=$RET; _minh_of "$c"; hc=$(( RET + eb )); fl=0
-    elif [ "$isr" = 1 ]; then hc=$rtgt; fl=0
-    elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1; fl=1
+      if [ "$rfix" = 1 ]; then flo=$(( ABS_MIN_H + eb )); [ "$flo" -gt "$hc" ] && flo=$hc; mn=1; fi
+    elif [ "$isr" = 1 ]; then hc=$rtgt; fl=0; [ "$rcount" -eq 0 ] && fl=1
+    elif [ "$c" = "$last" ]; then hc=$(( rest - assigned )); [ "$hc" -lt 1 ] && hc=1; fl=1; [ "$rfix" = 1 ] && flo=$MIN_H
     else weight=${NH[$c]}; [ "${NT[$c]}" = "leaf" ] && [ "${NP[$c]}" = "$WPANE" ] && weight=$WVAL
-         hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fl=1; fi
-    RC_SZ[$i]=$hc; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; vOT[$i]=$otc; vOB[$i]=$obc
+         hc=$(( weight * rest / wsum )); [ "$hc" -lt 1 ] && hc=1; assigned=$(( assigned + hc )); fl=1; [ "$rfix" = 1 ] && flo=$MIN_H; fi
+    RC_SZ[$i]=$hc; RC_FLEX[$i]=$fl; RC_CID[$i]=$c; RC_FLOOR[$i]=$flo; RC_MIN[$i]=$mn; vOT[$i]=$otc; vOB[$i]=$obc
     i=$((i+1))
   done
   RC_N=$n; RC_AVAIL=$avail; reconcile

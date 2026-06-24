@@ -144,6 +144,36 @@ restore_fairness() {
   done
 }
 
+# Peek-expansion / floor model: in a column where every pane but the peeked one is minimized,
+# the peek EXPANDS toward its saved height by shrinking the minimized panes toward ABS_MIN_H
+# — but never below it, and the peek is capped once they all reach the floor. Also exercises
+# the @minimize-absolute-min-height option (ABS_MIN_H) at 1 and 2.
+peek_expansion() {
+  local L out hpk lo abs
+  local saveabs=$ABS_MIN_H
+  BORDER_POS=off
+  # 6-pane column, short window y=20 (content budget 15 after 5 borders); peek pane5 wants 100.
+  L="0000,100x20,0,0[100x3,0,0,0,100x3,0,4,1,100x3,0,8,2,100x1,0,12,3,100x1,0,14,4,100x3,0,16,5]"
+  for abs in 1 2; do
+    ABS_MIN_H=$abs
+    out=$(transform "$L" " 0 1 2 3 4 " " " 5 100 " ")
+    lo=$(printf '%s' "$out" | grep -oE "100x[0-9]+,0,[0-9]+,[0-4]" | grep -oE "x[0-9]+" | tr -d x | sort -n | head -1)
+    hpk=$(printf '%s' "$out" | grep -oE "100x[0-9]+,0,[0-9]+,5" | grep -oE "x[0-9]+" | tr -d x)
+    if check_layout "$out" && [ -n "$lo" ] && [ "$lo" -ge "$abs" ] && [ -n "$hpk" ] && [ "$hpk" -gt "$abs" ]; then
+      ok "peek expansion: ABS_MIN_H=$abs -> minimized floor held (min=$lo), peek expanded+capped (h=$hpk)"
+    else
+      bad "peek expansion ABS_MIN_H=$abs: min=$lo hpk=$hpk :: $out"
+    fi
+  done
+  ABS_MIN_H=$saveabs
+  # A modest saved height restores EXACTLY when the column has room.
+  L="0000,100x50,0,0[100x10,0,0,0,100x9,0,11,1,100x9,0,21,2,100x9,0,31,3,100x9,0,41,4]"
+  out=$(transform "$L" " 0 1 3 " " " 4 8 " ")
+  hpk=$(printf '%s' "$out" | grep -oE "100x[0-9]+,0,[0-9]+,4" | grep -oE "x[0-9]+" | tr -d x)
+  if check_layout "$out" && [ "$hpk" = 8 ]; then ok "peek expansion: modest saved height restores exactly (h=8)"
+  else bad "peek expansion: modest restore not exact (h=$hpk)"; fi
+}
+
 main() {
   local lay leaves
   while IFS="$(printf '\t')" read -r lay leaves; do
@@ -157,6 +187,7 @@ main() {
   BORDER_POS=off
   edge_cases
   restore_fairness
+  peek_expansion
   summary "transform_props (offline)"
 }
 

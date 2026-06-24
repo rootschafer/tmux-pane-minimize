@@ -19,7 +19,8 @@ per-window lock directory.
 | option | default | what |
 |--------|---------|------|
 | `@minimize-key` | `C-t` | prefix-table key bound to `toggle`. |
-| `@minimize-height` | `3` | `MIN_H` — content rows a minimized pane collapses to. |
+| `@minimize-height` | `3` | `MIN_H` — comfortable content rows a minimized pane collapses to when there's room. |
+| `@minimize-absolute-min-height` | `1` | `ABS_MIN_H` — the floor a minimized pane is shrunk to (no lower) when a peek/expansion needs the room. Once every minimized pane is at this floor, the expansion is capped. Clamped to `[1, @minimize-height]`. |
 | `@minimize-width` | `30` | `MIN_W` — columns a *fully* minimized vertical stack narrows to. |
 | `@minimize-peek` | `on` | peek-on-focus: focusing a minimized pane expands it to its saved height, collapsing again on focus-out. |
 | `@minimize-resurrect` | `on` | persist per-pane state across restarts by setting resurrect's post-save/restore hooks. Turn `off` if you drive those hooks yourself. |
