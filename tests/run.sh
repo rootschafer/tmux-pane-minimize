@@ -16,7 +16,7 @@ BASH32=/bin/bash
 rc=0
 
 echo "### bash syntax check"
-for f in "$RUN_DIR"/../scripts/tmux-min.sh "$RUN_DIR"/../pane-minimize.tmux "$RUN_DIR"/*.sh; do
+for f in "$RUN_DIR"/../scripts/*.sh "$RUN_DIR"/../pane-minimize.tmux "$RUN_DIR"/*.sh; do
   "$BASH32" -n "$f" || { echo "SYNTAX FAIL: $f"; rc=1; }
 done
 

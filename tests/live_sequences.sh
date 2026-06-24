@@ -26,17 +26,24 @@ if ! command -v tmux >/dev/null 2>&1; then
 fi
 
 SOCK="tmin_test_$$"
-ENGINE="/tmp/tmin-engine-$SOCK.sh"
-PLUGIN="/tmp/tmin-plugin-$SOCK.tmux"
+# A socket-patched MIRROR of the repo (with a scripts/ subdir) so every relative `source`
+# inside the engine/plugin — tmux-min.sh -> transform.sh, pane-minimize.tmux -> marker.sh —
+# resolves exactly as in the real tree, just driving our sandbox server.
+WORKDIR="/tmp/tmin-$SOCK"
+ENGINE="$WORKDIR/scripts/tmux-min.sh"
+PLUGIN="$WORKDIR/pane-minimize.tmux"
 
 T() { tmux -L "$SOCK" "$@"; }
 
-cleanup() { tmux -L "$SOCK" kill-server >/dev/null 2>&1; rm -f "$ENGINE" "$PLUGIN"; }
+cleanup() { tmux -L "$SOCK" kill-server >/dev/null 2>&1; rm -rf "$WORKDIR"; }
 trap cleanup EXIT INT TERM
 
-# Socket-patch the engine and plugin so bare `tmux ` talks to our sandbox, and the
-# plugin's hooks invoke the patched engine.
-sed "s|tmux |tmux -L $SOCK |g" "$LS_DIR/../scripts/tmux-min.sh" > "$ENGINE"
+# Socket-patch every script (bare `tmux ` -> `tmux -L $SOCK `) into the mirror, and point
+# the plugin's SCRIPT at the patched engine so its hooks invoke our copy.
+mkdir -p "$WORKDIR/scripts"
+for f in "$LS_DIR"/../scripts/*.sh; do
+  sed "s|tmux |tmux -L $SOCK |g" "$f" > "$WORKDIR/scripts/$(basename "$f")"
+done
 sed -e "s|tmux |tmux -L $SOCK |g" -e "s|^SCRIPT=.*|SCRIPT=\"$ENGINE\"|" \
     "$LS_DIR/../pane-minimize.tmux" > "$PLUGIN"
 
@@ -169,7 +176,7 @@ s2 s3 s1 m2 s2 s1 r'
 # enter/exit ordering reflects real interleaving (modulo a 1-deep handoff artifact).
 part3() {
   local eng2 busy coll win r
-  eng2="/tmp/tmin-engine2-$SOCK.sh"
+  eng2="$WORKDIR/scripts/engine2.sh"   # in scripts/ so it still sources transform.sh
   busy="/tmp/tmin-busy-$SOCK"          # the mutual-exclusion marker dir
   coll="/tmp/tmin-coll-$SOCK"          # collision log
   : > "$coll"; rmdir "$busy" 2>/dev/null

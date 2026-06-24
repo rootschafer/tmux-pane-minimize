@@ -20,13 +20,12 @@
 set -u
 TP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-# Hermetic: stub tmux so sourcing the engine never touches a live server, then
-# pin MIN_H/MIN_W for deterministic geometry regardless of host config.
-tmux() { return 0; }
+# Source the PURE transform layer directly — it has no tmux calls, so this is hermetic
+# by construction (no stub needed). Then pin MIN_H/MIN_W for deterministic geometry
+# regardless of host config.
 # shellcheck source=/dev/null
-. "$TP_DIR/../scripts/tmux-min.sh"
-unset -f tmux
-# MIN_H/MIN_W are consumed by the sourced engine's transform() via globals.
+. "$TP_DIR/../scripts/transform.sh"
+# MIN_H/MIN_W are consumed by transform() via globals.
 # shellcheck disable=SC2034
 MIN_H=3
 # shellcheck disable=SC2034
