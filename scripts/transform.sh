@@ -35,6 +35,8 @@ RC_N=0; RC_AVAIL=0
 MINSET=" "          # " 1 4 7 " minimized pane numbers
 SAVEDW=" "          # " 1:80 4:80 " pane-number:saved-width (pre-narrow widths)
 MINH=" "            # " 1:5 4:8 " pane-number:custom minimized height (else global MIN_H)
+MINW=" "            # " 1:50 " pane-number:custom minimized WIDTH for its fully-minimized
+                    # vertical group (else global MIN_W); shared by the group, set by a drag
 WPANE=""; WVAL=0    # height restore weight override
 BORDER_POS=off
 RINT=0; RET=0
@@ -124,15 +126,30 @@ _edge_bonus() {  # $1 wm  $2 first  $3 last  $4 ot  $5 ob -> RET
   [ "$5" = 1 ] && [ "$3" = 1 ] && [ "$BORDER_POS" = bottom ] && RET=$((RET+1))
 }
 
-# A node gets a FIXED width in a horizontal split when it is a vertical stack that
-# is either fully minimized (-> MIN_W) or currently narrowed and being restored
-# (-> its saved width). Returns RET=fixed-width, or -1 if the node is flexible.
+# _minw_of: the custom minimized WIDTH for a fully-minimized group (vertical stack) -> RET,
+# or "" if none. Stored per-pane (@minimize_minw, carried in the MINW map) but shared by the
+# whole group; searches the node's leaves and returns the first one set (a width drag sets
+# them together, so any leaf carries the group's width).
+_minw_of() {
+  local id=$1 n tmp child
+  case "${NT[$id]}" in
+    leaf) n=${NP[$id]}; RET=""; case "$MINW" in *" $n:"*) tmp="${MINW#* $n:}"; tmp="${tmp%% *}"; case "$tmp" in ''|*[!0-9]*) ;; *) RET=$tmp ;; esac ;; esac ;;
+    *)    for child in ${NC[$id]}; do _minw_of "$child"; [ -n "$RET" ] && return; done; RET="" ;;
+  esac
+}
+
+# A node gets a FIXED width in a horizontal split when it is a vertical stack that is either
+# fully minimized (-> its group's custom @minimize_minw, or global MIN_W) or currently
+# narrowed and being restored (-> its saved width). Returns RET=fixed-width, or -1 if flexible.
+# With an empty MINW map, mw == MIN_W and this is byte-identical to the pre-custom-width path.
 _fixed_width() {
-  local id=$1 sw
+  local id=$1 sw mw
   [ "${NT[$id]}" = "v" ] || { RET=-1; return; }
+  _minw_of "$id"; mw=$RET
+  case "$mw" in ''|*[!0-9]*) mw=$MIN_W ;; esac
   fully_min "$id"
-  if [ "$RET" = 1 ]; then RET=$MIN_W; return; fi
-  if [ "${NW[$id]}" -le $((MIN_W + 2)) ]; then
+  if [ "$RET" = 1 ]; then RET=$mw; return; fi
+  if [ "${NW[$id]}" -le $((mw + 2)) ]; then
     _savedw_of "$id"; sw=$RET
     case "$sw" in ''|*[!0-9]*) ;; *) RET=$sw; return;; esac
   fi
@@ -364,7 +381,7 @@ checksum() { local s="$1" cs=0 i ch code
   printf '%04x' "$cs"; }
 
 transform() {
-  local layout="$1"; MINSET="$2"; SAVEDW="${3:- }"; WPANE="${4:-}"; WVAL="${5:-0}"; MINH="${6:- }"
+  local layout="$1"; MINSET="$2"; SAVEDW="${3:- }"; WPANE="${4:-}"; WVAL="${5:-0}"; MINH="${6:- }"; MINW="${7:- }"
   LS="${layout#*,}"; POS=0; NN=0; NT=(); NW=(); NH=(); NX=(); NY=(); NP=(); NC=(); WM=(); FM=()
   parse_cell
   recompute 0 "${NX[0]}" "${NY[0]}" "${NW[0]}" "${NH[0]}" 1 1

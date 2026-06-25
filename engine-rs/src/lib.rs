@@ -178,6 +178,39 @@ impl Node {
         }
     }
 
+    /// The custom minimized width for a fully-minimized group (shared by the stack, stored
+    /// per-pane in the MINW map). Mirrors bash `_minw_of`: searches the node's leaves and
+    /// returns the first digits-only value found, else None.
+    fn minw_of(&self, minw: &str) -> Option<i32> {
+        match &self.node_type {
+            NodeType::Leaf { pane } => {
+                if pane.is_empty() {
+                    None
+                } else {
+                    let pattern = format!(" {}:", pane);
+                    if let Some(pos) = minw.find(&pattern) {
+                        let start = pos + pattern.len();
+                        let rest = &minw[start..];
+                        let end = rest.find(' ').unwrap_or(rest.len());
+                        let val_str = &rest[..end];
+                        if !val_str.is_empty() && val_str.chars().all(|c| c.is_ascii_digit()) {
+                            return val_str.parse::<i32>().ok();
+                        }
+                    }
+                    None
+                }
+            }
+            NodeType::HSplit { children } | NodeType::VSplit { children } => {
+                for child in children {
+                    if let Some(w) = child.minw_of(minw) {
+                        return Some(w);
+                    }
+                }
+                None
+            }
+        }
+    }
+
     fn minh_of(&self, minh: &str, global_min_h: i32) -> i32 {
         if let NodeType::Leaf { pane } = &self.node_type {
             if !pane.is_empty() {
@@ -198,12 +231,15 @@ impl Node {
         global_min_h
     }
 
-    fn fixed_width(&self, minset: &str, savedw: &str, min_w: i32) -> i32 {
+    fn fixed_width(&self, minset: &str, savedw: &str, minw: &str, min_w: i32) -> i32 {
         if let NodeType::VSplit { .. } = &self.node_type {
+            // The group's custom minimized width (any leaf carries it), else the global MIN_W.
+            // Used both as the fully-minimized width and the narrowed-detection threshold.
+            let mw = self.minw_of(minw).unwrap_or(min_w);
             if self.fully_min(minset) {
-                return min_w;
+                return mw;
             }
-            if self.w <= min_w + 2 {
+            if self.w <= mw + 2 {
                 if let Some(sw) = self.savedw_of(savedw) {
                     return sw;
                 }
@@ -228,7 +264,7 @@ impl Node {
                 let mut last_idx = None;
 
                 for (idx, child) in children.iter().enumerate() {
-                    let fw = child.fixed_width(ctx.minset, ctx.savedw, ctx.min_w);
+                    let fw = child.fixed_width(ctx.minset, ctx.savedw, ctx.minw, ctx.min_w);
                     if fw >= 0 {
                         assigned += fw;
                     } else {
@@ -261,7 +297,7 @@ impl Node {
                 let mut reconcile_items = Vec::with_capacity(n);
 
                 for (idx, child) in children.iter().enumerate() {
-                    let fw = child.fixed_width(ctx.minset, ctx.savedw, ctx.min_w);
+                    let fw = child.fixed_width(ctx.minset, ctx.savedw, ctx.minw, ctx.min_w);
                     let cw;
                     let fl;
                     if !allfix && fw >= 0 {
@@ -517,6 +553,7 @@ pub struct Params<'a> {
     pub minset: &'a str,
     pub savedw: &'a str,
     pub minh: &'a str,
+    pub minw: &'a str,
     pub wpane: &'a str,
     pub wval: i32,
     pub min_h: i32,
@@ -668,63 +705,69 @@ mod tests {
         wpane: &str,
         wval: i32,
         minh: &str,
+        minw: &str,
     ) -> String {
         transform(
             layout,
-            &Params { minset, savedw, minh, wpane, wval, min_h, min_w, abs_min_h, border_pos },
+            &Params { minset, savedw, minh, minw, wpane, wval, min_h, min_w, abs_min_h, border_pos },
         )
     }
 
-    type Args = (i32, i32, i32, &'static str, &'static str, &'static str, &'static str, &'static str, i32, &'static str);
+    type Args = (i32, i32, i32, &'static str, &'static str, &'static str, &'static str, &'static str, i32, &'static str, &'static str);
 
     // Expected outputs captured from the bash oracle (scripts/transform.sh via
     // tests/transform_cli.sh) — the same reference tests/diff_test.sh diffs against. Covers
-    // every engine feature plus the two fixed regressions (i32 overflow, parse trailing-comma).
-    // Regenerate after an INTENTIONAL bash change with tests/gen_oracle_cases.sh.
+    // every engine feature plus the two fixed regressions (i32 overflow, parse trailing-comma)
+    // and the custom group min-width. Regenerate after an INTENTIONAL bash change with
+    // tests/gen_oracle_cases.sh.
     #[rustfmt::skip]
     const CASES: &[(Args, &'static str)] = &[
         // h-split, minimize pane 1
-        ((3, 15, 1, "off", "0000,80x24,0,0{39x24,0,0,1,40x24,41,0,2}", " 1 ", " ", "", 0, " "), "09fa,80x24,0,0{39x24,0,0,1,40x24,40,0,2}"),
+        ((3, 15, 1, "off", "0000,80x24,0,0{39x24,0,0,1,40x24,41,0,2}", " 1 ", " ", "", 0, " ", " "), "09fa,80x24,0,0{39x24,0,0,1,40x24,40,0,2}"),
         // v-split, minimize pane 1
-        ((3, 15, 1, "off", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 1 ", " ", "", 0, " "), "ac0d,80x24,0,0[80x3,0,0,1,80x20,0,4,2]"),
+        ((3, 15, 1, "off", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 1 ", " ", "", 0, " ", " "), "ac0d,80x24,0,0[80x3,0,0,1,80x20,0,4,2]"),
         // empty minset (no-op reflow)
-        ((3, 15, 1, "off", "0000,80x24,0,0{39x24,0,0,1,40x24,41,0,2}", " ", " ", "", 0, " "), "09fa,80x24,0,0{39x24,0,0,1,40x24,40,0,2}"),
+        ((3, 15, 1, "off", "0000,80x24,0,0{39x24,0,0,1,40x24,41,0,2}", " ", " ", "", 0, " ", " "), "09fa,80x24,0,0{39x24,0,0,1,40x24,40,0,2}"),
         // single leaf
-        ((3, 15, 1, "off", "0000,80x24,0,0,1", " 1 ", " ", "", 0, " "), "b25e,80x24,0,0,1"),
+        ((3, 15, 1, "off", "0000,80x24,0,0,1", " 1 ", " ", "", 0, " ", " "), "b25e,80x24,0,0,1"),
         // full v-stack min -> width collapse
-        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " ", "", 0, " "), "b708,254x67,0,0{223x67,0,0,95,30x67,224,0[30x16,224,0,96,30x16,224,17,98,30x33,224,34,97]}"),
+        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " ", "", 0, " ", " "), "b708,254x67,0,0{223x67,0,0,95,30x67,224,0[30x16,224,0,96,30x16,224,17,98,30x33,224,34,97]}"),
         // height-only nested min (96,97)
-        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 97 ", " ", "", 0, " "), "2b8c,254x67,0,0{127x67,0,0,95,126x67,128,0[126x3,128,0,96,126x59,128,4,98,126x3,128,64,97]}"),
+        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 97 ", " ", "", 0, " ", " "), "2b8c,254x67,0,0{127x67,0,0,95,126x67,128,0[126x3,128,0,96,126x59,128,4,98,126x3,128,64,97]}"),
         // per-pane custom minh 96:10
-        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 97 ", " ", "", 0, " 96:10 "), "9525,254x67,0,0{127x67,0,0,95,126x67,128,0[126x10,128,0,96,126x52,128,11,98,126x3,128,64,97]}"),
+        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 97 ", " ", "", 0, " 96:10 ", " "), "9525,254x67,0,0{127x67,0,0,95,126x67,128,0[126x10,128,0,96,126x52,128,11,98,126x3,128,64,97]}"),
         // border-pos top edge bonus
-        ((3, 15, 1, "top", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 1 ", " ", "", 0, " "), "fd0d,80x24,0,0[80x4,0,0,1,80x19,0,5,2]"),
+        ((3, 15, 1, "top", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 1 ", " ", "", 0, " ", " "), "fd0d,80x24,0,0[80x4,0,0,1,80x19,0,5,2]"),
         // border-pos bottom edge bonus
-        ((3, 15, 1, "bottom", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 2 ", " ", "", 0, " "), "cba7,80x24,0,0[80x19,0,0,1,80x4,0,20,2]"),
+        ((3, 15, 1, "bottom", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 2 ", " ", "", 0, " ", " "), "cba7,80x24,0,0[80x19,0,0,1,80x4,0,20,2]"),
         // peek/unminimize wval=10
-        ((3, 15, 1, "off", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 1 2 ", " 1:80 ", "1", 10, " "), "e399,80x24,0,0[80x10,0,0,1,80x13,0,11,2]"),
+        ((3, 15, 1, "off", "0000,80x24,0,0[80x12,0,0,1,80x11,0,13,2]", " 1 2 ", " 1:80 ", "1", 10, " ", " "), "e399,80x24,0,0[80x10,0,0,1,80x13,0,11,2]"),
         // restore fairness wval=20
-        ((3, 15, 1, "off", "0000,100x50,0,0[100x10,0,0,0,100x9,0,11,1,100x9,0,21,2,100x9,0,31,3,100x9,0,41,4]", " 0 1 3 ", " ", "4", 20, " "), "1db2,100x50,0,0[100x3,0,0,0,100x3,0,4,1,100x17,0,8,2,100x3,0,26,3,100x20,0,30,4]"),
+        ((3, 15, 1, "off", "0000,100x50,0,0[100x10,0,0,0,100x9,0,11,1,100x9,0,21,2,100x9,0,31,3,100x9,0,41,4]", " 0 1 3 ", " ", "4", 20, " ", " "), "1db2,100x50,0,0[100x3,0,0,0,100x3,0,4,1,100x17,0,8,2,100x3,0,26,3,100x20,0,30,4]"),
         // peek expansion abs_min_h=2
-        ((3, 15, 2, "off", "0000,100x20,0,0[100x3,0,0,0,100x3,0,4,1,100x3,0,8,2,100x1,0,12,3,100x1,0,14,4,100x3,0,16,5]", " 0 1 2 3 4 ", " ", "5", 100, " "), "1e67,100x20,0,0[100x2,0,0,0,100x2,0,3,1,100x2,0,6,2,100x2,0,9,3,100x2,0,12,4,100x5,0,15,5]"),
+        ((3, 15, 2, "off", "0000,100x20,0,0[100x3,0,0,0,100x3,0,4,1,100x3,0,8,2,100x1,0,12,3,100x1,0,14,4,100x3,0,16,5]", " 0 1 2 3 4 ", " ", "5", 100, " ", " "), "1e67,100x20,0,0[100x2,0,0,0,100x2,0,3,1,100x2,0,6,2,100x2,0,9,3,100x2,0,12,4,100x5,0,15,5]"),
         // savedw width restore
-        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " 96:120 ", "", 0, " "), "b708,254x67,0,0{223x67,0,0,95,30x67,224,0[30x16,224,0,96,30x16,224,17,98,30x33,224,34,97]}"),
+        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " 96:120 ", "", 0, " ", " "), "b708,254x67,0,0{223x67,0,0,95,30x67,224,0[30x16,224,0,96,30x16,224,17,98,30x33,224,34,97]}"),
         // i32-overflow regression (vsplit)
-        ((3, 15, 1, "off", "0000,60000x60000,0,0[60000x59996,0,0,1,60000x1,0,59997,2]", " ", " ", "", 0, " "), "f856,60000x60000,0,0[60000x59997,0,0,1,60000x2,0,59998,2]"),
+        ((3, 15, 1, "off", "0000,60000x60000,0,0[60000x59996,0,0,1,60000x1,0,59997,2]", " ", " ", "", 0, " ", " "), "f856,60000x60000,0,0[60000x59997,0,0,1,60000x2,0,59998,2]"),
         // i32-overflow regression (hsplit)
-        ((3, 15, 1, "off", "0000,60000x60000,0,0{59996x60000,0,0,1,1x60000,59997,0,2}", " ", " ", "", 0, " "), "cc3e,60000x60000,0,0{59997x60000,0,0,1,2x60000,59998,0,2}"),
+        ((3, 15, 1, "off", "0000,60000x60000,0,0{59996x60000,0,0,1,1x60000,59997,0,2}", " ", " ", "", 0, " ", " "), "cc3e,60000x60000,0,0{59997x60000,0,0,1,2x60000,59998,0,2}"),
         // parse trailing-comma regression
-        ((3, 15, 1, "off", "0000,10x10,0,0{5x10,0,0,1,5x10,6,0,2,", " ", " ", "", 0, " "), "d1a0,10x10,0,0{3x10,0,0,1,4x10,4,0,2,1x10,9,0,}"),
+        ((3, 15, 1, "off", "0000,10x10,0,0{5x10,0,0,1,5x10,6,0,2,", " ", " ", "", 0, " ", " "), "d1a0,10x10,0,0{3x10,0,0,1,4x10,4,0,2,1x10,9,0,}"),
         // all-columns-minimized (no flex)
-        ((3, 15, 1, "off", "0000,80x24,0,0{40x24,0,0,1,39x24,41,0,2}", " 1 2 ", " ", "", 0, " "), "020a,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
+        ((3, 15, 1, "off", "0000,80x24,0,0{40x24,0,0,1,39x24,41,0,2}", " 1 2 ", " ", "", 0, " ", " "), "020a,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
         // tiny window degrade
-        ((3, 15, 1, "off", "0000,4x4,0,0[4x2,0,0,1,4x1,0,3,2]", " 1 2 ", " ", "", 0, " "), "85ef,4x4,0,0[4x2,0,0,1,4x1,0,3,2]"),
+        ((3, 15, 1, "off", "0000,4x4,0,0[4x2,0,0,1,4x1,0,3,2]", " 1 2 ", " ", "", 0, " ", " "), "85ef,4x4,0,0[4x2,0,0,1,4x1,0,3,2]"),
+        // custom group min width 96:50
+        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " ", "", 0, " ", " 96:50 "), "9150,254x67,0,0{203x67,0,0,95,50x67,204,0[50x16,204,0,96,50x16,204,17,98,50x33,204,34,97]}"),
+        // custom min width ignored if not fully-min
+        ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 ", " ", "", 0, " ", " 96:50 "), "3a09,254x67,0,0{127x67,0,0,95,126x67,128,0[126x3,128,0,96,126x20,128,4,98,126x42,128,25,97]}"),
     ];
 
     #[test]
     fn matches_bash_oracle() {
         for (i, (a, expected)) in CASES.iter().enumerate() {
-            let got = run(a.0, a.1, a.2, a.3, a.4, a.5, a.6, a.7, a.8, a.9);
+            let got = run(a.0, a.1, a.2, a.3, a.4, a.5, a.6, a.7, a.8, a.9, a.10);
             assert_eq!(&got.as_str(), expected, "oracle case {i}: args={a:?}");
         }
     }
@@ -732,7 +775,7 @@ mod tests {
     #[test]
     fn checksum_is_stable_and_four_hex() {
         // The checksum is the first field; it must be 4 lowercase hex chars and deterministic.
-        let out = run(3, 15, 1, "off", "0000,80x24,0,0{39x24,0,0,1,40x24,41,0,2}", " 1 ", " ", "", 0, " ");
+        let out = run(3, 15, 1, "off", "0000,80x24,0,0{39x24,0,0,1,40x24,41,0,2}", " 1 ", " ", "", 0, " ", " ");
         let cs = out.split(',').next().unwrap();
         assert_eq!(cs.len(), 4);
         assert!(cs.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));

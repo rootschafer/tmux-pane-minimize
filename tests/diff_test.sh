@@ -16,17 +16,17 @@ WVALS="0 1 3 9 1000"
 PASSED=0
 FAILED=0
 
-# diff_one BORDER_POS ABS_MIN_H LAYOUT MINSET SAVEDW WPANE WVAL MINH
+# diff_one BORDER_POS ABS_MIN_H LAYOUT MINSET SAVEDW WPANE WVAL MINH [MINW]
 diff_one() {
-  local bp="$1" abs_min_h="$2" layout="$3" minset="$4" savedw="$5" wpane="$6" wval="$7" minh="$8"
-  
+  local bp="$1" abs_min_h="$2" layout="$3" minset="$4" savedw="$5" wpane="$6" wval="$7" minh="$8" minw="${9:- }"
+
   # Run bash driver
   local out_bash
-  out_bash=$("$BASH_DRIVER" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh")
-  
+  out_bash=$("$BASH_DRIVER" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh" "$minw")
+
   # Run rust binary
   local out_rust
-  out_rust=$("$RUST_BIN" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh")
+  out_rust=$("$RUST_BIN" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh" "$minw")
   
   if [ "$out_bash" = "$out_rust" ]; then
     PASSED=$((PASSED + 1))
@@ -119,5 +119,19 @@ for abs in 1 2; do
 done
 L="0000,100x50,0,0[100x10,0,0,0,100x9,0,11,1,100x9,0,21,2,100x9,0,31,3,100x9,0,41,4]"
 diff_one off 1 "$L" " 0 1 3 " " " 4 8 " "
+
+# Custom minimized group WIDTH (MINW, the 9th diff_one arg). A fully-minimized vertical
+# stack in an h-split should narrow to the group's custom width instead of MIN_W; sweep
+# several widths and confirm bash and Rust agree (and that a non-fully-min group ignores it).
+echo "Running custom group width..."
+WL="0000,200x60,0,0{120x60,0,0,0[120x20,0,0,1,120x19,0,21,2,120x19,0,41,3],79x60,121,0[79x30,121,0,4,79x29,121,31,5]}"
+for mw in 10 25 50 99 200; do
+  # right column (4,5) fully minimized -> narrows to custom width $mw
+  diff_one off 1 "$WL" " 4 5 " " " "" 0 " " " 4:${mw} "
+  # left column (1,2,3) fully minimized too -> both narrow
+  diff_one off 1 "$WL" " 1 2 3 4 5 " " " "" 0 " " " 1:${mw} 4:${mw} "
+  # not fully minimized -> custom width must be ignored
+  diff_one off 1 "$WL" " 4 " " " "" 0 " " " 4:${mw} "
+done
 
 echo "DIFFERENTIAL TESTS PASSED: $PASSED cases compared successfully."

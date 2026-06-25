@@ -286,6 +286,51 @@ part_minh() {
   assert_live "p4 after dragend"
 }
 
+# --- Part 4b: custom minimized WIDTH via side-border drag on a fully-minimized group -------
+# A vertical group that is ALL minimized and has NO active pane narrows to MIN_W; dragging its
+# side border sets a custom @minimize_minw that persists (repin, and un/re-minimize).
+part_minw() {
+  local left rtop rbot win w mw
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 200 -y 50
+  T set-option -g @minimize-width 30
+  T split-window -h -t 0
+  T split-window -v -t 1
+  win=$(T display-message -p '#{window_id}')
+  left=$(T list-panes -F '#{pane_left} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  rtop=$(T list-panes -F '#{pane_left} #{pane_top} #{pane_id}' | sort -k1,1n -k2,2n | tail -2 | head -1 | awk '{print $3}')
+  rbot=$(T list-panes -F '#{pane_left} #{pane_top} #{pane_id}' | sort -k1,1n -k2,2n | tail -1 | awk '{print $3}')
+
+  bash "$ENGINE" toggle "$rtop"; bash "$ENGINE" toggle "$rbot"   # right group fully minimized
+  T select-pane -t "$left"                                       # no group pane active
+  assert_live "p4b right group fully minimized"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 30 ]; then ok "p4b group narrowed to MIN_W(30)"; else bad "p4b group width=$w (expected 30)"; fi
+
+  # simulate a horizontal border drag widening the group to 60, then dragend
+  T set-option -g @minimize_guard 1
+  T resize-pane -t "$rtop" -x 60 >/dev/null 2>&1
+  T set-option -gu @minimize_guard
+  bash "$ENGINE" dragend "$win"
+  mw=$(T show-options -t "$rtop" -pqv @minimize_minw 2>/dev/null || true)
+  if [ "$mw" = 60 ]; then ok "p4b dragend set @minimize_minw=60"; else bad "p4b @minimize_minw=$mw (expected 60)"; fi
+  mw=$(T show-options -t "$rbot" -pqv @minimize_minw 2>/dev/null || true)
+  if [ "$mw" = 60 ]; then ok "p4b minw shared across the group"; else bad "p4b rbot @minimize_minw=$mw (expected 60)"; fi
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 60 ]; then ok "p4b group pinned to custom width 60"; else bad "p4b group width=$w (expected 60)"; fi
+  assert_live "p4b after width drag"
+
+  bash "$ENGINE" repin "$win"; w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 60 ]; then ok "p4b custom width survives repin"; else bad "p4b after repin width=$w (expected 60)"; fi
+
+  # persist across un-minimize + re-minimize (the group reforms at its custom width)
+  bash "$ENGINE" toggle "$rtop"; T select-pane -t "$left"
+  bash "$ENGINE" toggle "$rtop"; T select-pane -t "$left"; bash "$ENGINE" repin "$win"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 60 ]; then ok "p4b custom width persists across un/re-minimize"; else bad "p4b after re-minimize width=$w (expected 60)"; fi
+  assert_live "p4b after re-minimize"
+}
+
 # --- Part 5: dashboard (minimize all but active) ----------------------------
 part_dashboard() {
   local win act orig now nmin top bot dflag
@@ -567,6 +612,7 @@ main() {
   part2
   part3
   part_minh
+  part_minw
   part_dashboard
   part_peek
   part_resize_window

@@ -102,6 +102,13 @@ pane's minimized height. Resizing the **active** pane still changes its peek/res
 height, as before. A custom height lasts until the pane is un-minimized, then resets to
 the global `@minimize-height`.
 
+### Per-group minimized width
+When **every** pane in a vertical stack is minimized, the whole column narrows to
+`@minimize-width`. If that group has no focused pane, drag its **side** border and the new
+width becomes the group's custom minimized width — shared by every pane in the stack. Unlike
+the per-pane height, this width **persists** as long as the group exists (across resizes,
+un-minimize/re-minimize, and tmux-resurrect restarts), so a column you like wider stays wider.
+
 ### Dashboard view (minimize all but active)
 Bind `@minimize-dashboard-key` to collapse every pane in the window except the active
 one into minimized strips — a quick "focus on this pane" view. Press it again to

@@ -15,5 +15,6 @@ SAVEDW="$7"
 WPANE="$8"
 WVAL="$9"
 MINH="${10}"
+MINW="${11:- }"
 
-transform "$LAYOUT" "$MINSET" "$SAVEDW" "$WPANE" "$WVAL" "$MINH"
+transform "$LAYOUT" "$MINSET" "$SAVEDW" "$WPANE" "$WVAL" "$MINH" "$MINW"

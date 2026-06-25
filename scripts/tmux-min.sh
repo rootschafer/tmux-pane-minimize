@@ -95,11 +95,11 @@ trap _unlock EXIT
 # onto select-layout keeps the suppression window as tight as possible.
 apply() {
   local win="$1" wp="${2:-}" wv="${3:-0}" out new rid
-  local n=0 f1 f2 f3 f4 f5 f6 zoomed layout minset=" " savedw=" " minh=" " actpane="" actmin=0
+  local n=0 f1 f2 f3 f4 f5 f6 f7 zoomed layout minset=" " savedw=" " minh=" " minw=" " actpane="" actmin=0
   out=$(tmux set-option -g @minimize_guard 1 \; \
         display-message -p -t "$win" '#{window_zoomed_flag}|#{pane-border-status}|#{window_layout}' \; \
-        list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{?@minimize_peek,1,0}|#{@minimize_saved_w}|#{@minimize_minh}|#{pane_active}')
-  while IFS='|' read -r f1 f2 f3 f4 f5 f6; do
+        list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{?@minimize_peek,1,0}|#{@minimize_saved_w}|#{@minimize_minh}|#{pane_active}|#{@minimize_minw}')
+  while IFS='|' read -r f1 f2 f3 f4 f5 f6 f7; do
     n=$((n + 1))
     if [ "$n" = 1 ]; then zoomed=$f1; BORDER_POS=$f2; layout=$f3; continue; fi
     [ -z "$f1" ] && continue
@@ -107,12 +107,13 @@ apply() {
     [ "$f2" = 1 ] && [ "$f3" != 1 ] && minset="$minset$f1 "
     [ -n "$f4" ] && savedw="$savedw$f1:$f4 "
     [ -n "$f5" ] && minh="$minh$f1:$f5 "
+    [ -n "$f7" ] && minw="$minw$f1:$f7 "
     if [ "$f6" = 1 ]; then actpane=$rid; { [ "$f2" = 1 ] && [ "$f3" != 1 ]; } && actmin=1; fi
   done <<EOF
 $out
 EOF
   case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
-  if ! new=$(_transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh"); then
+  if ! new=$(_transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh" "$minw"); then
     tmux set-option -gu @minimize_guard   # don't leave the resize-hook guard stuck on
     return 1
   fi
@@ -181,16 +182,22 @@ peekout() {
   _unlock
 }
 
-# dragend: handle a mouse border-drag release for a whole window. For each pane:
-#  - peeking pane resized        -> remember the new height as its saved/peek height
-#  - NON-active minimized pane    -> that dragged height becomes its custom minimized
+# dragend: handle a mouse border-drag release for a whole window. Three effects:
+#  - peeking pane resized          -> remember the new height as its saved/peek height
+#  - NON-active minimized pane      -> that dragged HEIGHT becomes its custom minimized
 #    height (@minimize_minh); does NOT un-minimize it.
-# We compare against the pane's current effective min height with a 1-row tolerance so
-# the border-status edge nibble and untouched panes don't trigger a spurious update.
+#  - fully-minimized vertical GROUP (>=2 stacked panes, all minimized, none active) whose
+#    WIDTH was dragged -> that width becomes the group's custom minimized width
+#    (@minimize_minw on every member); persists until those panes change. A horizontal drag
+#    changes width; a vertical drag changes height — we detect which from what actually moved.
+# Tolerance of >1 so the border-status edge nibble and untouched panes don't trigger a change.
 dragend() {
-  local win="$1" id a h p act mh cur d need=0
+  local win="$1" id a h p act mh cur d need=0 table cols width cmw cids
   _lock "$win"
-  while read -r id a h p act mh; do
+  table=$(tmux list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{pane_height}|#{?@minimize_peek,1,0}|#{pane_active}|#{@minimize_minh}|#{pane_width}|#{pane_left}|#{@minimize_minw}')
+  # per-pane: peek-save + custom minimized HEIGHT (width fields are handled by the awk pass below)
+  while IFS='|' read -r id a h p act mh _ _ _; do
+    [ -z "$id" ] && continue
     if [ "$a" = 1 ] && [ "$p" = 1 ]; then
       tmux set-option -t "$id" -p @minimize_saved "$h"
     elif [ "$a" = 1 ] && [ "$p" != 1 ] && [ "$act" != 1 ]; then
@@ -199,7 +206,25 @@ dragend() {
       if [ "$d" -gt 1 ]; then tmux set-option -t "$id" -p @minimize_minh "$h"; need=1; fi
     fi
   done <<EOF
-$(tmux list-panes -t "$win" -F '#{pane_id} #{?@minimize_active,1,0} #{pane_height} #{?@minimize_peek,1,0} #{pane_active} #{@minimize_minh}')
+$table
+EOF
+  # per fully-minimized column: group panes by pane_left (stacked panes share it). A column
+  # of >=2 panes that are ALL minimized and NONE active is a narrowed group; if its width no
+  # longer matches its recorded minw (or MIN_W), the user dragged it -> persist as @minimize_minw.
+  cols=$(printf '%s\n' "$table" | awk -F'|' '
+    $1=="" { next }
+    { L=$8; cnt[L]++; if ($2!=1) notmin[L]=1; if ($5==1) act[L]=1; wd[L]=$7; mw[L]=$9; ids[L]=ids[L]" "$1 }
+    END { for (L in cnt) if (cnt[L]>=2 && notmin[L]!=1 && act[L]!=1) print wd[L]"|"mw[L]"|"ids[L] }')
+  while IFS='|' read -r width cmw cids; do
+    [ -z "$width" ] && continue
+    case "$cmw" in ''|*[!0-9]*) cur=$MIN_W ;; *) cur=$cmw ;; esac
+    d=$(( width - cur )); [ "$d" -lt 0 ] && d=$(( -d ))
+    if [ "$d" -gt 1 ]; then
+      for id in $cids; do tmux set-option -t "$id" -p @minimize_minw "$width"; done
+      need=1
+    fi
+  done <<EOF
+$cols
 EOF
   [ "$need" = 1 ] && apply "$win"
   _unlock
@@ -320,12 +345,12 @@ save_state() {
   local f="${1:-}"
   [ -z "$f" ] && f=$(_state_file)
   mkdir -p "$(dirname "$f")" 2>/dev/null || true
-  # one TAB-separated line per minimized pane: sess win pane saved saved_w minh
-  tmux list-panes -a -F '#{?@minimize_active,#{session_name}	#{window_index}	#{pane_index}	#{@minimize_saved}	#{@minimize_saved_w}	#{@minimize_minh},}' \
+  # one TAB-separated line per minimized pane: sess win pane saved saved_w minh minw
+  tmux list-panes -a -F '#{?@minimize_active,#{session_name}	#{window_index}	#{pane_index}	#{@minimize_saved}	#{@minimize_saved_w}	#{@minimize_minh}	#{@minimize_minw},}' \
     | grep -v '^$' > "$f" 2>/dev/null || true
 }
 restore_state() {
-  local f="${1:-}" sess win pane saved savedw minh tgt wid k v w wins="" panemap
+  local f="${1:-}" sess win pane saved savedw minh minw tgt wid k v w wins="" panemap
   local -a cmd
   [ -z "$f" ] && f=$(_state_file)
   [ -f "$f" ] || return 0
@@ -335,7 +360,7 @@ restore_state() {
   # chained tmux call (same coalescing as dashboard()).
   panemap=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{window_id}' 2>/dev/null || true)
   cmd=()
-  while IFS='	' read -r sess win pane saved savedw minh; do
+  while IFS='	' read -r sess win pane saved savedw minh minw; do
     [ -z "$sess" ] && continue
     tgt="${sess}:${win}.${pane}"
     wid=""
@@ -348,6 +373,7 @@ EOF
     case "$saved"  in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved   "$saved"  ) ;; esac
     case "$savedw" in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved_w "$savedw" ) ;; esac
     case "$minh"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minh    "$minh"   ) ;; esac
+    case "$minw"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minw    "$minw"   ) ;; esac
     case " $wins " in *" $wid "*) ;; *) wins="$wins $wid" ;; esac
   done < "$f"
   [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"

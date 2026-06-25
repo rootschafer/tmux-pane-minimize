@@ -53,6 +53,7 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 | `@minimize_saved` | pane | toggle (on minimize), resize-while-peeked hook, dashboard ENTER | toggle (on un-minimize), `peekin` (peek height) | the pane's height *before* minimizing — the size it restores/peeks to. |
 | `@minimize_saved_w` | pane | toggle (on minimize), dashboard ENTER | `apply` (→ SAVEDW, restore a narrowed stack's width) | the pane's width before a fully-minimized stack narrowed. |
 | `@minimize_minh` | pane | `dragend`, `minh-set/grow/shrink` | `apply` (→ MINH map) | per-pane custom minimized height; **cleared on un-minimize** (per-minimize-session). |
+| `@minimize_minw` | pane | `dragend` (side-border drag on a fully-minimized group) | `apply` (→ MINW map) | custom minimized **width** for a fully-minimized vertical group, stored on each member pane and shared by the group. **Persists** (not cleared on un-minimize) so the group keeps its width; also saved/restored by resurrect. |
 | `@minimize_peek` | pane | `peekin` (set) / `peekout` (unset) | `apply` (excluded from MINSET while peeking), focus hooks | transient: set only while a minimized pane is focused and expanded. Not persisted. |
 | `@minimize_dashboard` | pane | dashboard ENTER | dashboard EXIT (which panes WE minimized) | flags panes minimized *by* dashboard so user-minimized panes survive the round trip. Cleared on EXIT. |
 | `@minimize_dashboard_layout` | window | dashboard ENTER | dashboard EXIT (verbatim restore) | the exact `window_layout` saved on ENTER; unset on EXIT. |
@@ -64,8 +65,8 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 
 `apply()` reads the `@minimize_*` pane options above plus `#{window_layout}` in one
 chained tmux call, folds them into the strings the **pure** transform consumes —
-`MINSET` (minimized pane numbers), `SAVEDW`, `MINH`, `WPANE`/`WVAL` (the restore pane and
-its target height) — and `BORDER_POS`, then shells out to the Rust engine
+`MINSET` (minimized pane numbers), `SAVEDW`, `MINH`, `MINW` (custom group widths),
+`WPANE`/`WVAL` (the restore pane and its target height) — and `BORDER_POS`, then shells out to the Rust engine
 (`tmux-min-transform`, from `engine-rs/`) via `_transform()`. The transform touches no tmux:
 same inputs → same layout. `scripts/transform.sh` is the byte-for-byte bash oracle the Rust
 engine is validated against, and is what the offline property suite exhaustively checks.
