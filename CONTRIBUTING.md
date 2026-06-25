@@ -7,7 +7,9 @@ the tests, and the techniques that make developing a tmux plugin tractable.
 
 ```
 pane-minimize.tmux       TPM entry point: reads @minimize-* options, binds keys, sets hooks
-engine-rs/               the Rust port of the pure layer — binary tmux-min-transform (THE engine)
+engine-rs/               the Rust port of the pure layer (THE engine): src/lib.rs (transform +
+                         tree/parser/reconcile/checksum + cargo tests) + src/main.rs (thin CLI,
+                         binary tmux-min-transform)
 scripts/transform.sh     bash equivalent of the engine, kept ONLY as the differential test oracle
 scripts/tmux-min.sh      the tmux-IO layer — shells out to tmux-min-transform; subcommands + apply
 scripts/marker.sh        the border-marker builder (build_marker -> MARKER_FMT)
@@ -51,6 +53,12 @@ tests/run.sh            # bash -n + shellcheck-free syntax + offline + live
 QUICK=1 tests/run.sh    # offline: skip the WPANE/WVAL inner sweep (fast iteration)
 VERBOSE=1 tests/run.sh  # also print every passing assertion
 
+# the Rust engine
+cargo test  --manifest-path engine-rs/Cargo.toml   # native unit tests (oracle cases, no bash)
+cargo build --release --manifest-path engine-rs/Cargo.toml
+/bin/bash tests/diff_test.sh           # differential: Rust binary vs bash oracle, byte-for-byte
+QUICK=1 /bin/bash tests/diff_test.sh   # ... skip the WVAL inner sweep (fast)
+
 # individual suites
 /bin/bash tests/transform_props.sh     # offline property suite (~11k cases, deterministic)
 /bin/bash tests/live_sequences.sh      # live isolated-server suite
@@ -60,9 +68,16 @@ VERBOSE=1 tests/run.sh  # also print every passing assertion
 shellcheck -s bash -S warning scripts/*.sh pane-minimize.tmux tests/*.sh
 ```
 
-The **offline** suite is the one to lean on: it's pure and fast-ish, and it has caught
-real bugs (the original zero-height bug fell out of it on the first run). Add cases there
-whenever you touch the transform.
+The engine lives in `engine-rs/` as a library (`src/lib.rs`, the pure `transform()` + the
+node tree, parser, reconcile, checksum) plus a thin CLI (`src/main.rs`). `cargo test` runs an
+oracle table (in `lib.rs`) captured from the bash reference — a fast, bash-free regression set;
+regenerate it with `tests/gen_oracle_cases.sh` after an intentional engine change. The
+**`tests/diff_test.sh`** differential is the exhaustive check: it diffs the Rust binary against
+`scripts/transform.sh` (the bash oracle) byte-for-byte across ~11k cases. The bash oracle is
+also what the **offline** property suite (`transform_props.sh`) drives — it's pure and has
+caught real bugs (the original zero-height bug fell out of it on the first run). When you change
+engine behaviour, change `transform.sh` (the oracle) and the Rust together and keep the
+differential at 100%.
 
 The **live** suite spins up throwaway `tmux -L … -f /dev/null` servers. The end-to-end
 resurrect test wants a tmux-resurrect checkout — point `RESURRECT_PATH` at one (or it's

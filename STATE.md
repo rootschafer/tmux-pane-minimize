@@ -23,7 +23,7 @@ per-window lock directory.
 | `@minimize-absolute-min-height` | `1` | `ABS_MIN_H` — the floor a minimized pane is shrunk to (no lower) when a peek/expansion needs the room. Once every minimized pane is at this floor, the expansion is capped. Clamped to `[1, @minimize-height]`. |
 | `@minimize-width` | `30` | `MIN_W` — columns a *fully* minimized vertical stack narrows to. |
 | `@minimize-peek` | `on` | peek-on-focus: focusing a minimized pane expands it to its saved height, collapsing again on focus-out. |
-| `@minimize-resurrect` | `on` | persist per-pane state across restarts by setting resurrect's post-save/restore hooks. Turn `off` if you drive those hooks yourself. |
+| `@minimize-resurrect` | `on` | persist per-pane state across restarts by **chaining onto** resurrect's post-save/restore hooks (any hook you already set is preserved — ours runs after it). Turn `off` to opt out entirely. |
 | `@minimize-dashboard-key` | *(unbound)* | opt-in key for `dashboard` (minimize all but active; toggle). |
 | `@minimize-minh-step` | `1` | rows per grow/shrink step for the custom minimized height. |
 | `@minimize-minh-grow-key` / `-shrink-key` / `-reset-key` | *(unbound)* | opt-in keys for per-pane custom minimized height. |
@@ -84,3 +84,24 @@ engine is validated against, and is what the offline property suite exhaustively
   focus/resize hooks (which fire concurrent `run-shell -b` copies) can't interleave applies.
   A dead holder is reclaimed via its recorded `pid`; a ~20s valve prevents a wedged holder
   hanging a keystroke forever.
+
+---
+
+## Shared (non-`@minimize`) global state the plugin touches
+
+The plugin tries to be a **good citizen**: it owns the `@minimize-*` / `@minimize_*`
+namespace freely, but where it must touch *shared* global tmux state it PRESERVES what's
+already there rather than clobbering. Audit of everything outside our namespace:
+
+| What | How | Citizenship |
+|------|-----|-------------|
+| `pane-focus-in` / `pane-focus-out` hooks | **append** (`set-hook -a`) via `_add_hook`, idempotent on `$SCRIPT` | preserves your/other plugins' focus hooks; never duplicates on reload |
+| `after-resize-pane` (×2) / `after-resize-window` hooks | **append** (`_add_hook`), idempotent | same — preserves existing resize hooks |
+| `@resurrect-hook-post-save-all` / `-post-restore-all` | **chain** (`existing ; ours`) via `_add_resurrect_hook`, idempotent on `$SCRIPT` | preserves a resurrect hook you already set; ours runs after |
+| `pane-border-status` / `pane-border-format` | only in the **zero-config augment** path; respects existing position, remembers the original. If you embed `@minimize-indicator` in your own format, or set `@minimize-marker-style none`, the plugin does **not** touch them | opt-out by design |
+| `@minimize-key` + opt-in keys (`MouseDragEnd1Border`, dashboard/minh keys) | **replace** (binding a key is replacing) | accepted: binding the key is the user's explicit request. The mouse-border-drag bind has no tmux default. |
+
+Refreshing an *appended* hook after its command changes needs a server restart (or
+`set-hook -gu <event>`), since we can't remove just our entry without rebuilding the array —
+that's the deliberate cost of not clobbering. New hooks must follow this pattern: append +
+idempotent, never bare `set-hook -g` on a shared event.

@@ -114,11 +114,12 @@ layout (so minimized panes come back the right *size*), but not the per-pane opt
 that mark a pane as minimized — so without help the plugin forgets which panes were
 minimized after a restore. With `@minimize-resurrect 'on'` (the default) this plugin
 hooks resurrect's save/restore to persist that state, keyed by
-`session:window.pane_index`. **It sets `@resurrect-hook-post-save-all` and
-`@resurrect-hook-post-restore-all`** — if you already use those hooks yourself, set
-`@minimize-resurrect 'off'` and call `scripts/tmux-min.sh save-state` / `restore-state`
-from your own hooks instead. (Peek and the dashboard grouping are transient and aren't
-persisted.)
+`session:window.pane_index`. It **chains onto** `@resurrect-hook-post-save-all` and
+`@resurrect-hook-post-restore-all` — if you already set those hooks yourself, they're
+preserved (ours runs after, via resurrect's `eval`), so you don't need to disable anything.
+Set `@minimize-resurrect 'off'` to opt out entirely and call `scripts/tmux-min.sh
+save-state` / `restore-state` from your own hooks. (Peek and the dashboard grouping are
+transient and aren't persisted.)
 
 ## Options
 ```tmux
@@ -162,8 +163,8 @@ set -g @minimize-minh-reset-key  ''   # e.g. '0'  reset it to @minimize-height
 set -g @minimize-dashboard-key   ''   # e.g. 'M'  minimize all panes but the active one
 
 set -g @minimize-resurrect 'on'       # persist minimized state across tmux-resurrect
-                                      # save/restore (set 'off' if you manage the
-                                      # resurrect hooks yourself — see below)
+                                      # save/restore (chains onto your resurrect hooks,
+                                      # preserving them; 'off' to opt out — see below)
 ```
 A typical setup that turns on the optional keys:
 ```tmux

@@ -16,12 +16,37 @@ if [ -z "${TMUX_MIN_TRANSFORM:-}" ] \
    && [ ! -x "$CURRENT_DIR/scripts/tmux-min-transform" ] \
    && ! command -v tmux-min-transform >/dev/null 2>&1 \
    && [ ! -x "$CURRENT_DIR/engine-rs/target/release/tmux-min-transform" ]; then
-  tmux run-shell -b "$CURRENT_DIR/scripts/ensure-engine.sh"
+  tmux run-shell -b "bash '$CURRENT_DIR/scripts/ensure-engine.sh'"
 fi
 
 opt() { # @name  default
   local v; v="$(tmux show-option -gqv "$1" 2>/dev/null || true)"
   if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi
+}
+
+# Install a GLOBAL event hook as a good citizen: APPEND (set-hook -a) so any hook the user or
+# another plugin already set for that event keeps firing — `set-hook -g` would clobber it.
+# `token` is a substring unique to our hook; if it's already present we skip, so re-sourcing
+# the config never stacks duplicate copies (a plain -a would). Refreshing our own hook after a
+# command change needs a server restart (or `set-hook -gu <event>`); that's the cost of not
+# clobbering. Used for after-resize-pane/-window and pane-focus-in/out.
+_add_hook() {  # event  token  command
+  case "$(tmux show-hooks -g "$1" 2>/dev/null || true)" in
+    *"$2"*) ;;                          # ours already installed -> don't duplicate
+    *) tmux set-hook -a -g "$1" "$3" ;;
+  esac
+}
+
+# Add one of resurrect's hook options without clobbering a value the user already set:
+# resurrect runs the option via eval, so we chain ours after theirs with ';'. Idempotent on
+# our $SCRIPT path so reloads don't re-chain.
+_add_resurrect_hook() {  # option  command
+  local cur; cur="$(tmux show-option -gqv "$1" 2>/dev/null || true)"
+  case "$cur" in
+    *"$SCRIPT"*) ;;                                  # already chained
+    '')          tmux set-option -g "$1" "$2" ;;     # nothing there -> set ours
+    *)           tmux set-option -g "$1" "$cur ; $2" ;;  # preserve theirs, append ours
+  esac
 }
 
 # The border-marker builder (build_marker -> MARKER_FMT) lives in its own file; it needs
@@ -59,13 +84,11 @@ DASH_KEY="$(opt @minimize-dashboard-key '')"
 
 # tmux-resurrect persistence (on by default; set @minimize-resurrect 'off' to disable).
 # resurrect restores #{window_layout} (minimized geometry) but not our per-pane options,
-# so we persist them via resurrect's post-save/post-restore hooks. NOTE: this SETS those
-# two hooks — if you already use @resurrect-hook-post-save-all / -post-restore-all
-# yourself, set @minimize-resurrect 'off' and call `tmux-min.sh save-state`/`restore-state`
-# from your own hooks instead.
+# so we CHAIN onto resurrect's post-save/post-restore hooks. If you already set those hooks
+# yourself, they're preserved (ours runs after, via resurrect's eval) — no need to disable.
 if [ "$(opt @minimize-resurrect 'on')" = "on" ]; then
-  tmux set-option -g @resurrect-hook-post-save-all    "bash '$SCRIPT' save-state"
-  tmux set-option -g @resurrect-hook-post-restore-all "bash '$SCRIPT' restore-state"
+  _add_resurrect_hook @resurrect-hook-post-save-all    "bash '$SCRIPT' save-state"
+  _add_resurrect_hook @resurrect-hook-post-restore-all "bash '$SCRIPT' restore-state"
 fi
 
 # Forget minimized state when the user resizes the ACTIVE pane taller themselves.
@@ -75,18 +98,18 @@ fi
 #    a NON-active minimized pane (mouse drag) sets its minimized height instead (dragend)
 #  - only clear when clearly taller than minimized (tolerates the 1-row border nibble)
 #  - also drop any per-pane custom minimized height (it's per-minimize-session)
-tmux set-hook -g after-resize-pane \
+_add_hook after-resize-pane '@minimize_active 0' \
   "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{pane_active},#{&&:#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}},#{>:#{pane_height},$GROW}}}}' 'set-option -p @minimize_active 0 ; set-option -pu @minimize_minh'"
 
 # If the user resizes a pane *while it is peeked* (expanded for inspection), remember
 # the new height as its saved size so future peeks / un-minimize use it. set-option
 # does NOT expand #{pane_height}, so capture it through run-shell (which does).
-tmux set-hook -a -g after-resize-pane \
+_add_hook after-resize-pane '@minimize_saved' \
   "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{@minimize_active},#{@minimize_peek}}}' 'run-shell -b \"tmux set-option -t #{pane_id} -p @minimize_saved #{pane_height}\"'"
 
 # Terminal/window resize rescales panes (fires after-resize-window, not
 # after-resize-pane) -> re-pin every minimized pane.
-tmux set-hook -g after-resize-window "run-shell -b \"$SCRIPT repin #{window_id}\""
+_add_hook after-resize-window "$SCRIPT" "run-shell -b \"$SCRIPT repin #{window_id}\""
 
 # Mouse: a border drag resizes internally (no per-step hook); MouseDragEnd1Border
 # fires on release. The engine's `dragend` then: saves a peeked pane's new height, and
@@ -98,11 +121,10 @@ tmux bind-key -T root MouseDragEnd1Border run-shell -b "$SCRIPT dragend #{window
 # Peek-on-focus: temporarily expand a minimized pane while selected. Gated on
 # @minimize-peek (default on). Requires focus-events on (already set in dotfiles).
 if [ "$PEEK" = "on" ]; then
-  # set-hook -g (replace), NOT -a (append): appending re-adds a copy on every plugin
-  # reload, so the hook would fire N times. Replace keeps exactly one. (We own the
-  # pane-focus-in/out hooks; the after-resize-pane chain above is reset the same way.)
-  tmux set-hook -g pane-focus-in  "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id} #{window_id}\"'"
-  tmux set-hook -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id} #{window_id}\"'"
+  # Append (idempotent) so a user's existing pane-focus-in/out hooks keep firing; _add_hook
+  # skips re-adding ours (keyed on $SCRIPT) so a reload doesn't stack duplicate copies.
+  _add_hook pane-focus-in  "$SCRIPT" "if -F '#{&&:#{@minimize_active},#{!=:#{@minimize_peek},1}}' 'run-shell -b \"$SCRIPT peekin #{pane_id} #{window_id}\"'"
+  _add_hook pane-focus-out "$SCRIPT" "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id} #{window_id}\"'"
 fi
 
 # Minimized-pane indicator. @minimize-marker-style is flat | pill | none; @minimize-marker
