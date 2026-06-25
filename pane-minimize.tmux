@@ -7,6 +7,18 @@ set -u
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 SCRIPT="$CURRENT_DIR/scripts/tmux-min.sh"
 
+# The layout math runs in a compiled Rust engine (engine-rs/ -> tmux-min-transform). Nix
+# installs ship it prebuilt beside the scripts; TPM/manual installs build it on first load.
+# If it isn't resolvable yet, build it in the BACKGROUND (installs Rust if needed — opt out
+# with @minimize-auto-install-rust off) so tmux start isn't blocked. Minimize works once it
+# finishes; until then toggling a pane is a no-op.
+if [ -z "${TMUX_MIN_TRANSFORM:-}" ] \
+   && [ ! -x "$CURRENT_DIR/scripts/tmux-min-transform" ] \
+   && ! command -v tmux-min-transform >/dev/null 2>&1 \
+   && [ ! -x "$CURRENT_DIR/engine-rs/target/release/tmux-min-transform" ]; then
+  tmux run-shell -b "$CURRENT_DIR/scripts/ensure-engine.sh"
+fi
+
 opt() { # @name  default
   local v; v="$(tmux show-option -gqv "$1" 2>/dev/null || true)"
   if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$2"; fi
@@ -93,34 +105,45 @@ if [ "$PEEK" = "on" ]; then
   tmux set-hook -g pane-focus-out "if -F '#{@minimize_peek}' 'run-shell -b \"$SCRIPT peekout #{pane_id} #{window_id}\"'"
 fi
 
-# Opt-in marker: only when @minimize-marker is "on" do we touch pane-border-*.
-# Every pane shows @minimize-marker-left-format (e.g. your pane index/title); minimized
-# panes additionally get the right-aligned pill. Set the left-format to keep your own
-# border contents while letting the plugin own the marker.
-if [ "$MARKER" = "on" ]; then
-  MARKER_FMT="$(build_marker)"   # reads @minimize-marker-* -> the minimized-pane pill format
-  # Be a good citizen: AUGMENT the border line, don't clobber it. Remember the user's
-  # ORIGINAL pane-border-format exactly once (@minimize_marker_installed guards re-entry — a
-  # reload would otherwise read our already-augmented value and append the marker twice),
-  # then append the minimized-pane marker to it. tmux reports its built-in default for an
-  # unset option, so a user who set nothing keeps tmux's native border (index + pane title)
-  # plus our marker, instead of us replacing it with an opinionated pane-index. Set
-  # @minimize-marker-left-format to override the left content entirely (e.g.
-  # '#[align=left] #{pane_index} ' for an index-only border).
-  if [ "$(tmux show-option -gqv @minimize_marker_installed)" != 1 ]; then
-    tmux set-option -g @minimize_orig_format "$(tmux show-option -gqv pane-border-format)"
-    tmux set-option -g @minimize_marker_installed 1
-  fi
-  MARKER_LEFT="$(opt @minimize-marker-left-format "$(tmux show-option -gqv @minimize_orig_format)")"
-  # Respect the user's existing border position; only enable it (at @minimize-marker-position,
-  # default top) when it's off, since the marker needs a visible border line.
-  if [ -z "$MARKER_POS" ]; then
-    case "$(tmux show-option -gqv pane-border-status)" in
-      top|bottom) MARKER_POS="$(tmux show-option -gqv pane-border-status)" ;;
-      *)          MARKER_POS=top ;;
-    esac
-  fi
-  case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac
-  tmux set-option -g pane-border-status "$MARKER_POS"
-  tmux set-option -g pane-border-format "${MARKER_LEFT}#{?@minimize_active,${MARKER_FMT},}"
+# Minimized-pane indicator. @minimize-marker-style is flat | pill | none; @minimize-marker
+# off (or style none) disables it. The computed indicator is ALWAYS published to the
+# @minimize-indicator option so you can place it in YOUR OWN pane-border-format and keep full
+# control of your border styling:
+#     set -g pane-border-format '… #{?@minimize_active,#{E:#{@minimize-indicator}},}'
+# If your pane-border-format already references @minimize-indicator, the plugin leaves your
+# border options untouched (you're placing it). Otherwise — for a zero-config install — it
+# AUGMENTS the existing pane-border-format with the indicator on minimized panes.
+MARKER_STYLE="$(opt @minimize-marker-style 'flat')"
+if [ "$MARKER" = "on" ] && [ "$MARKER_STYLE" != "none" ]; then
+  MARKER_FMT="$(build_marker)"   # reads @minimize-marker-* -> the minimized-pane indicator
+  tmux set-option -g @minimize-indicator "$MARKER_FMT"
+  case "$(tmux show-option -gqv pane-border-format)" in
+    *@minimize-indicator*) : ;;   # user places the indicator themselves -> don't touch borders
+    *)
+      # Zero-config augment: remember the user's ORIGINAL pane-border-format exactly once
+      # (@minimize_marker_installed guards re-entry so a reload doesn't double the marker),
+      # then append the marker. tmux reports its built-in default for an unset option, so a
+      # user who set nothing keeps tmux's native border plus our marker. Override the left
+      # content with @minimize-marker-left-format ('#[align=left] #{pane_index} ' for an
+      # index-only border), or set your own pane-border-format with @minimize-indicator.
+      if [ "$(tmux show-option -gqv @minimize_marker_installed)" != 1 ]; then
+        tmux set-option -g @minimize_orig_format "$(tmux show-option -gqv pane-border-format)"
+        tmux set-option -g @minimize_marker_installed 1
+      fi
+      MARKER_LEFT="$(opt @minimize-marker-left-format "$(tmux show-option -gqv @minimize_orig_format)")"
+      # Respect the user's existing border position; only enable it (at
+      # @minimize-marker-position, default top) when off, since the marker needs a border line.
+      if [ -z "$MARKER_POS" ]; then
+        case "$(tmux show-option -gqv pane-border-status)" in
+          top|bottom) MARKER_POS="$(tmux show-option -gqv pane-border-status)" ;;
+          *)          MARKER_POS=top ;;
+        esac
+      fi
+      case "$MARKER_POS" in top|bottom) ;; *) MARKER_POS=top ;; esac
+      tmux set-option -g pane-border-status "$MARKER_POS"
+      tmux set-option -g pane-border-format "${MARKER_LEFT}#{?@minimize_active,${MARKER_FMT},}"
+      ;;
+  esac
+else
+  tmux set-option -gu @minimize-indicator 2>/dev/null || true   # disabled: clear the indicator
 fi

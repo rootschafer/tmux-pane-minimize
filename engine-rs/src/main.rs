@@ -76,19 +76,21 @@ impl<'a> Parser<'a> {
                 is_split = true;
                 vertical = ch == b'[';
                 self.pos += 1; // skip '{' or '['
+                // Mirror bash's parse_cell loop exactly: always parse a child, then look
+                // at the separator and advance pos by 1 regardless. ',' continues, anything
+                // else (incl. end-of-string, byte 0) breaks. parse_cell is robust to pos
+                // past end (returns an empty leaf), so an unterminated trailing comma yields
+                // a trailing empty leaf — same degrade-to-leaf behaviour bash has.
                 loop {
-                    if self.pos >= self.ls.len() {
-                        break;
-                    }
                     let kid = self.parse_cell();
                     children.push(kid);
-                    if self.pos < self.ls.len() {
-                        let next_ch = self.ls.as_bytes()[self.pos];
-                        self.pos += 1; // skip ',' or the closing bracket '}' / ']'
-                        if next_ch != b',' {
-                            break;
-                        }
+                    let sep = if self.pos < self.ls.len() {
+                        self.ls.as_bytes()[self.pos]
                     } else {
+                        0
+                    };
+                    self.pos += 1; // skip ',' or the closing bracket '}' / ']' (or past end)
+                    if sep != b',' {
                         break;
                     }
                 }
@@ -265,7 +267,9 @@ impl Node {
                         cw = if val < 1 { 1 } else { val };
                         fl = true;
                     } else {
-                        let val = child.w * rest / flexsum;
+                        // i64 intermediate: bash uses 64-bit arithmetic, so this multiply
+                        // never wraps for tmux-sized dims; i32 here would silently overflow.
+                        let val = (child.w as i64 * rest as i64 / flexsum as i64) as i32;
                         cw = if val < 1 { 1 } else { val };
                         r_assigned += cw;
                         fl = true;
@@ -450,7 +454,8 @@ impl Node {
                                 weight = ctx.wval;
                             }
                         }
-                        let val = weight * rest / wsum;
+                        // i64 intermediate: match bash's 64-bit arithmetic (see HSplit note).
+                        let val = (weight as i64 * rest as i64 / wsum as i64) as i32;
                         hc = if val < 1 { 1 } else { val };
                         r_assigned += hc;
                         fl = true;

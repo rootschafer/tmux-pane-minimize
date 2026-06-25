@@ -25,6 +25,20 @@ if ! command -v tmux >/dev/null 2>&1; then
   exit 0
 fi
 
+# The engine now shells out to the compiled Rust transform (engine-rs/tmux-min-transform).
+# The socket-patched mirror below has no engine-rs/ dir, so build the binary once and point
+# the patched engine at it via TMUX_MIN_TRANSFORM. Exporting it here (before the test server
+# starts) means both the direct `bash "$ENGINE" …` calls and the run-shell hook children
+# (peekin/peekout/dragend/repin) inherit it.
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "cargo not found — skipping live suite (needs the Rust engine)"
+  exit 0
+fi
+RUST_BIN="$LS_DIR/../engine-rs/target/release/tmux-min-transform"
+( cd "$LS_DIR/../engine-rs" && cargo build --release >/dev/null 2>&1 ) || {
+  echo "cargo build failed — skipping live suite"; exit 0; }
+export TMUX_MIN_TRANSFORM="$RUST_BIN"
+
 SOCK="tmin_test_$$"
 # A socket-patched MIRROR of the repo (with a scripts/ subdir) so every relative `source`
 # inside the engine/plugin — tmux-min.sh -> transform.sh, pane-minimize.tmux -> marker.sh —

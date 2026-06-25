@@ -6,10 +6,12 @@
 # minimized, that whole group is shrunk to MIN_W columns and its horizontal
 # neighbour widens to fill — restoring any pane widens the group back.
 #
-# The PURE layout math lives in transform.sh (sourced below): parse -> recompute ->
-# reconcile -> serialize, with no tmux/time/randomness. EVERYTHING in this file reads
-# tmux state, calls transform(), and applies the result atomically with select-layout.
-# Keep that boundary: no layout math here, no `tmux ` in transform.sh.
+# The PURE layout math lives in the compiled Rust engine, tmux-min-transform (built from
+# engine-rs/): parse -> recompute -> reconcile -> serialize, with no tmux/time/randomness.
+# EVERYTHING in this file reads tmux state, calls the binary via _transform(), and applies
+# the result atomically with select-layout. Keep that boundary: no layout math here.
+# scripts/transform.sh is a byte-for-byte bash equivalent of the engine, kept ONLY as the
+# differential-test oracle (tests/diff_test.sh) and offline property suite — not run here.
 #
 # Usage:
 #   tmux-min toggle <pane_id>     toggle minimize state of <pane_id>
@@ -17,21 +19,38 @@
 #   tmux-min selftest             offline layout-string transform check (no tmux)
 set -u
 
-# Source the pure transform layer from THIS script's directory. Resolving via BASH_SOURCE
-# (not a relative path) is what lets the test harness run a socket-patched copy from a
-# scratch dir: it places transform.sh alongside the patched engine, so this still finds it.
+# The pure layout math now lives in the compiled Rust engine, tmux-min-transform (built
+# from engine-rs/). transform.sh is kept ONLY as the test oracle and is NOT sourced here.
+# Resolve the binary via a BASH_SOURCE-relative path so a socket-patched test copy still
+# works. Resolution order: explicit override (env / Nix), then PATH, then the dev build.
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-# shellcheck source=/dev/null
-. "$_DIR/transform.sh"
+_BIN="${TMUX_MIN_TRANSFORM:-}"
+if [ -z "$_BIN" ]; then
+  if [ -x "$_DIR/tmux-min-transform" ]; then
+    _BIN="$_DIR/tmux-min-transform"                            # installed beside scripts (Nix package)
+  elif command -v tmux-min-transform >/dev/null 2>&1; then
+    _BIN="tmux-min-transform"                                  # on PATH
+  elif [ -x "$_DIR/../engine-rs/target/release/tmux-min-transform" ]; then
+    _BIN="$_DIR/../engine-rs/target/release/tmux-min-transform"  # cargo dev build
+  fi
+fi
 
-# Read the size options in ONE tmux round-trip (this runs on every engine invocation),
-# overriding transform.sh's defaults.
+# Read the size options in ONE tmux round-trip (this runs on every engine invocation).
 IFS='|' read -r MIN_H MIN_W ABS_MIN_H <<<"$(tmux display-message -p '#{@minimize-height}|#{@minimize-width}|#{@minimize-absolute-min-height}' 2>/dev/null || true)"
 case "$MIN_H" in ''|*[!0-9]*) MIN_H=3 ;; esac
 case "$MIN_W" in ''|*[!0-9]*) MIN_W=30 ;; esac
 case "$ABS_MIN_H" in ''|*[!0-9]*) ABS_MIN_H=1 ;; esac
 [ "$ABS_MIN_H" -lt 1 ] && ABS_MIN_H=1
 [ "$ABS_MIN_H" -gt "$MIN_H" ] && ABS_MIN_H=$MIN_H   # the floor can't exceed the comfortable height
+BORDER_POS="${BORDER_POS:-off}"   # apply() overrides this from tmux; default is for selftest
+
+# _transform: call the Rust engine with the SAME six positional inputs the bash transform()
+# took, plus the four globals it read (MIN_H MIN_W ABS_MIN_H BORDER_POS). Prints the new
+# layout string to stdout. Hard-fails (no bash fallback) if the binary can't be found.
+_transform() {  # LAYOUT MINSET SAVEDW WPANE WVAL MINH
+  [ -n "$_BIN" ] || { echo "tmux-pane-minimize: tmux-min-transform binary not found (build engine-rs or set TMUX_MIN_TRANSFORM)" >&2; return 1; }
+  "$_BIN" "$MIN_H" "$MIN_W" "$ABS_MIN_H" "$BORDER_POS" "$@"
+}
 
 # ---- per-window mutex (atomic mkdir; portable — macOS has no flock) ----
 # The focus/resize hooks invoke this engine with `run-shell -b`, so several copies
@@ -93,7 +112,10 @@ apply() {
 $out
 EOF
   case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
-  new=$(transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh")
+  if ! new=$(_transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh"); then
+    tmux set-option -gu @minimize_guard   # don't leave the resize-hook guard stuck on
+    return 1
+  fi
   tmux select-layout -t "$win" "$new" \; set-option -gu @minimize_guard
   _rezoom "$zoomed" "$actpane" "$actmin"
 }
@@ -352,11 +374,11 @@ case "${1:-}" in
     L='02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}'
     echo "in : $L"
     echo "height-only (96,97 min, 98 not -> 96/97=3, 95 untouched):"
-    echo "  $(transform "$L" ' 96 97 ')"
+    echo "  $(_transform "$L" ' 96 97 ' ' ' '' 0 ' ')"
     echo "full stack min (96,98,97 all min -> right column narrows to MIN_W=$MIN_W, 95 widens):"
-    echo "  $(transform "$L" ' 96 98 97 ')"
+    echo "  $(_transform "$L" ' 96 98 97 ' ' ' '' 0 ' ')"
     echo "peek: 96 min, 98 peeking (excluded from MINSET) -> 98 expands among flex panes:"
-    echo "  $(transform "$L" ' 96 ')"
+    echo "  $(_transform "$L" ' 96 ' ' ' '' 0 ' ')"
     echo "per-pane height: 96,97 min, 96 pinned to custom @minimize_minh=10 (97 -> MIN_H):"
-    echo "  $(transform "$L" ' 96 97 ' ' ' '' 0 ' 96:10 ')" ;;
+    echo "  $(_transform "$L" ' 96 97 ' ' ' '' 0 ' 96:10 ')" ;;
 esac

@@ -7,21 +7,29 @@ the tests, and the techniques that make developing a tmux plugin tractable.
 
 ```
 pane-minimize.tmux       TPM entry point: reads @minimize-* options, binds keys, sets hooks
-scripts/transform.sh     the PURE layer — layout-tree parse/recompute/reconcile/serialize
-scripts/tmux-min.sh      the tmux-IO layer — sources transform.sh; all subcommands + apply
+engine-rs/               the Rust port of the pure layer — binary tmux-min-transform (THE engine)
+scripts/transform.sh     bash equivalent of the engine, kept ONLY as the differential test oracle
+scripts/tmux-min.sh      the tmux-IO layer — shells out to tmux-min-transform; subcommands + apply
 scripts/marker.sh        the border-marker builder (build_marker -> MARKER_FMT)
 STATE.md                 the single state model — every @minimize-* / @minimize_* option
 tests/                   the test harness (see tests/README.md)
 .github/workflows/ci.yml CI: macOS + ubuntu
 ```
 
-The engine is split along its one real seam. `scripts/transform.sh` holds the heart:
-`transform()` is a **pure function** of `(layout, MINSET, SAVEDW, WPANE, WVAL, MINH)` —
-no tmux, no time, no randomness — which is what makes the bulk of the tests exhaustive
-and deterministic. (grep it: zero `tmux` calls.) `scripts/tmux-min.sh` sources it and is
-the thin orchestration layer: everything that touches tmux (toggle/peek/dashboard/
-save-state/…) reads state, calls `transform`, and applies the result with `select-layout`.
-The two halves are physically separate so the purity boundary can't quietly erode.
+The engine is split along its one real seam: the pure layout math vs the tmux IO. The pure
+math is `transform()` — a **pure function** of `(layout, MINSET, SAVEDW, WPANE, WVAL, MINH)`
+plus the `MIN_H/MIN_W/ABS_MIN_H/BORDER_POS` knobs — with no tmux, time, or randomness, which
+is what makes the bulk of the tests exhaustive and deterministic. It now lives in Rust
+(`engine-rs/`, binary **`tmux-min-transform`**); `scripts/transform.sh` is a byte-for-byte
+bash equivalent kept ONLY as the test oracle the Rust engine is validated against (see
+`tests/diff_test.sh`). `scripts/tmux-min.sh` is the thin orchestration layer: everything that
+touches tmux (toggle/peek/dashboard/save-state/…) reads state, calls the binary via its
+`_transform()` wrapper, and applies the result with `select-layout`. It locates the binary via
+`TMUX_MIN_TRANSFORM`, then `PATH`, then the `engine-rs/target/release` dev build, and hard-fails
+if none is found (there is no bash fallback — `transform.sh` is the oracle only).
+
+Build the engine with `cargo build --release` in `engine-rs/` (the test harnesses do this for
+you). It has zero dependencies, so the build is fast and offline.
 
 See **STATE.md** for the option model (the `@minimize-*` config vs `@minimize_*` runtime
 convention, and each option's scope/writer/reader/lifecycle).

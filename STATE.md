@@ -29,7 +29,8 @@ per-window lock directory.
 | `@minimize-minh-grow-key` / `-shrink-key` / `-reset-key` | *(unbound)* | opt-in keys for per-pane custom minimized height. |
 | `@minimize-marker` | `on` | own `pane-border-status`/`-format` and draw the minimized-pane marker. |
 | `@minimize-marker-position` | *(respect existing)* | `top` or `bottom`. Unset = keep the user's current `pane-border-status` (only turn it on, at `top`, if it was `off`). |
-| `@minimize-marker-style` | `flat` | `flat` (transparent chevrons in the border colour) or `pill` (rounded coloured cap). |
+| `@minimize-marker-style` | `flat` | `flat` (transparent chevrons in the border colour), `pill` (rounded coloured cap), or `none` (no indicator; leaves `pane-border-*` untouched). |
+| `@minimize-indicator` | *(published by plugin)* | the computed indicator format. The plugin **sets** this so you can embed it in your OWN `pane-border-format`: `#{?@minimize_active,#{E:#{@minimize-indicator}},}`. If your `pane-border-format` references it, the plugin leaves your border options alone instead of augmenting them. |
 | `@minimize-marker-left-format` | the existing `pane-border-format` | what every pane's border shows left of the marker. Defaults to whatever `pane-border-format` already was (the plugin *augments* rather than replaces it). Set explicitly to e.g. `#[align=left] #{pane_index} ` for an index-only border, or `''` for marker-only. |
 | `@minimize-marker-format` | *(computed)* | override the whole minimized-pane marker string. |
 | `@minimize-marker-icon` / `-icon-active` | chevrons | the inward/outward glyph pair. |
@@ -62,10 +63,12 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 ### The pure transform's inputs
 
 `apply()` reads the `@minimize_*` pane options above plus `#{window_layout}` in one
-chained tmux call, folds them into the strings the **pure** `transform()` consumes —
+chained tmux call, folds them into the strings the **pure** transform consumes —
 `MINSET` (minimized pane numbers), `SAVEDW`, `MINH`, `WPANE`/`WVAL` (the restore pane and
-its target height) — and `BORDER_POS`. `transform()` (in `scripts/transform.sh`) touches
-no tmux: same inputs → same layout, which is what the offline suite exhaustively checks.
+its target height) — and `BORDER_POS`, then shells out to the Rust engine
+(`tmux-min-transform`, from `engine-rs/`) via `_transform()`. The transform touches no tmux:
+same inputs → same layout. `scripts/transform.sh` is the byte-for-byte bash oracle the Rust
+engine is validated against, and is what the offline property suite exhaustively checks.
 
 ---
 

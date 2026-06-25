@@ -56,6 +56,19 @@ programs.tmux.extraConfig = ''
 ```
 Pin/update with `nix flake update tmux-pane-minimize`.
 
+### Building the engine
+The layout math runs in a small compiled Rust engine (`engine-rs/`, binary
+`tmux-min-transform`) — it has zero dependencies, so the build is fast and offline:
+```sh
+cargo build --release --manifest-path engine-rs/Cargo.toml
+```
+The plugin finds the binary via `$TMUX_MIN_TRANSFORM`, then your `PATH`, then the
+`engine-rs/target/release` build above. For a TPM/manual install, build it once (or put
+`tmux-min-transform` on your `PATH`); set `TMUX_MIN_TRANSFORM` to an explicit path if you
+install the binary elsewhere. On Nix, build it with `rustPlatform.buildRustPackage` and
+`set-environment -g TMUX_MIN_TRANSFORM <store-path>/bin/tmux-min-transform` before loading
+the plugin. If the binary can't be found, minimize/peek do nothing (there is no fallback).
+
 ## Usage
 `prefix` + `Ctrl-t` toggles the active pane between minimized (`@minimize-height`
 rows, default 3) and its previous size. Re-bind with `@minimize-key`.
@@ -126,7 +139,7 @@ set -g @minimize-marker-position 'top'   # 'top' | 'bottom' (the border line)
 #   pill           — a rounded coloured background (your border colours) with the chevrons
 #                    "cut out" of it (drawn in the terminal background via #[reverse], so
 #                    they stay sharp on any theme without a contrast guess).
-set -g @minimize-marker-style 'flat'    # 'flat' (transparent) | 'pill'
+set -g @minimize-marker-style 'flat'    # 'flat' (transparent) | 'pill' | 'none' (no marker)
 set -g @minimize-marker-icon ''         # inactive glyph (default two chevrons, inward)
 set -g @minimize-marker-icon-active ''  # active/peeked glyph (default two chevrons, outward)
 set -g @minimize-marker-icon-color ''   # default: 'default' (flat) / 'cutout' (pill); 'auto'
@@ -166,19 +179,30 @@ Only `@minimize-key` is bound by default; the grow/shrink/reset and dashboard ke
 opt-in (empty until you set them). The marker and resurrect persistence are on by default.
 
 ### About the marker
-The marker is **on by default** and needs the pane-border status line, so the plugin sets
-`pane-border-status` and `pane-border-format` for you. By default it prepends the pane
-index, then on a minimized pane appends two chevrons that point inward (collapsed) /
-outward (peeked). Two looks:
+The marker is **on by default**. Looks:
 - **flat** (default) — just the chevrons, in `fg=default`, which on a pane border *is* the
   border line's colour — so they match the border per active/inactive pane and stay
   transparent. Clean on any theme; nothing to configure.
 - **pill** (`@minimize-marker-style pill`) — a rounded background in your border colour
   with the chevrons cut out of it (via `#[reverse]`, so they read on any theme).
+- **none** (`@minimize-marker-style none`) — no indicator; the plugin leaves your
+  `pane-border-*` options completely alone.
 
-To bypass all of this and draw the marker yourself, set `@minimize-marker off` and add a
-`#{?@minimize_active,…}` conditional to your own `pane-border-format`. To keep the marker
-but change what's left of it, set `@minimize-marker-left-format`.
+#### Place the marker yourself (keep control of your border)
+The plugin publishes the computed marker to the **`@minimize-indicator`** option. Embed it
+anywhere in your *own* `pane-border-format` and the plugin will **not** touch your border:
+```tmux
+set -g pane-border-status top
+set -g pane-border-format '#[align=left] #{pane_index} #{?@minimize_active,#{E:#{@minimize-indicator}},}'
+```
+`#{E:…}` expands the indicator's nested formatting; the `#{?@minimize_active,…,}` shows it
+only on minimized panes. This is the recommended way if you style your border line yourself
+— the plugin stops owning `pane-border-format` the moment it sees `@minimize-indicator` in it.
+
+For a **zero-config** install that doesn't reference the option, the plugin instead augments
+the existing `pane-border-format` for you (remembering the original). To keep that augment
+behaviour but change what's left of the marker, set `@minimize-marker-left-format`. To turn
+the indicator off entirely, set `@minimize-marker off` or `@minimize-marker-style none`.
 
 **Glyphs not rendering?** The chevrons need a Nerd Font (or any font with U+F053/F054). If
 you see boxes, set `@minimize-marker-icon` / `-icon-active` to glyphs your font has. The

@@ -11,7 +11,8 @@
 # itself, and PRINTS the marker format to stdout. No tmux state is mutated here.
 #
 # The marker is two FontAwesome chevrons: inactive/minimized points INWARD ">  <"
-# (collapsed); active/peeked points OUTWARD "<  >" (expanded). Two styles:
+# (collapsed); active/peeked points OUTWARD "<  >" (expanded). Styles: 'none' (no marker,
+# returns empty), plus —
 #   flat (default) — chevrons in fg=default, which on a pane border IS the border-line
 #     colour tmux already swaps per active/inactive pane, so they match it for free and
 #     stay transparent. A leading space gaps them off the line.
@@ -67,7 +68,8 @@ _contrast_fg() {
 build_marker() {
   local MARKER_STYLE MARKER_ICON MARKER_ICON_ACTIVE _icdef MARKER_ICON_COLOR MARKER_DEFAULT
   local MARKER_WIDTH MARKER_BG MARKER_BG_ACTIVE MPAD MARKER_LCAP MARKER_RCAP ICONFG ICONFG_ACTIVE MARKER_FMT
-  MARKER_STYLE="$(opt @minimize-marker-style 'flat')"        # 'flat' (transparent) or 'pill'
+  MARKER_STYLE="$(opt @minimize-marker-style 'flat')"        # 'flat' (transparent), 'pill', or 'none'
+  [ "$MARKER_STYLE" = "none" ] && { printf ''; return; }     # none -> no indicator at all
   MARKER_ICON="$(opt @minimize-marker-icon "$(printf '\xef\x81\x94 \xef\x81\x93')")"
   MARKER_ICON_ACTIVE="$(opt @minimize-marker-icon-active "$(printf '\xef\x81\x93 \xef\x81\x94')")"
   # Icon-colour default depends on style. FLAT: 'default' — on a pane border, fg=default IS

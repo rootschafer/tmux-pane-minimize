@@ -6,9 +6,12 @@
 #   (layout, MINSET, SAVEDW, WPANE, WVAL, MINH)  [+ the MIN_H/MIN_W/BORDER_POS globals]
 # which is exactly what makes the offline property suite exhaustive and deterministic.
 #
+# This is now the TEST ORACLE, not the runtime engine. At runtime tmux-min.sh shells out to
+# the compiled Rust port (engine-rs/, binary tmux-min-transform), which reproduces this file
+# byte-for-byte. transform.sh is kept as the reference the Rust engine is validated against.
 # It is sourced by:
-#   - scripts/tmux-min.sh    the tmux-IO layer (reads tmux state, calls transform, applies)
 #   - tests/transform_props.sh   the offline property suite (drives transform directly)
+#   - tests/transform_cli.sh     the bash driver for the differential test vs the Rust binary
 #
 # A "minimized" pane (MINSET membership) is pinned to MIN_H rows. Additionally, when
 # EVERY pane in a vertically-stacked group is minimized, that whole group is shrunk to
