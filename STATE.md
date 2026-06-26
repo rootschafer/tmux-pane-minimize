@@ -24,9 +24,10 @@ per-window lock directory.
 | `@minimize-width` | `30` | `MIN_W` — columns a *fully* minimized vertical stack narrows to. |
 | `@minimize-peek` | `on` | peek-on-focus: focusing a minimized pane expands it to its saved height, collapsing again on focus-out. |
 | `@minimize-resurrect` | `on` | persist per-pane state across restarts by **chaining onto** resurrect's post-save/restore hooks (any hook you already set is preserved — ours runs after it). Turn `off` to opt out entirely. |
-| `@minimize-dashboard-key` | *(unbound)* | opt-in key for `dashboard` (minimize all but active; toggle). |
+| `@minimize-others-key` | *(unbound)* | opt-in key for `minimize-others` (minimize all but active; toggle). |
 | `@minimize-minh-step` | `1` | rows per grow/shrink step for the custom minimized height. |
 | `@minimize-minh-grow-key` / `-shrink-key` / `-reset-key` | *(unbound)* | opt-in keys for per-pane custom minimized height. |
+| `@minimize-minw-reset-key` | *(unbound)* | opt-in key to reset a fully-minimized group's custom width (set by side-border drag) back to `@minimize-width`. |
 | `@minimize-marker` | `on` | own `pane-border-status`/`-format` and draw the minimized-pane marker. |
 | `@minimize-marker-position` | *(respect existing)* | `top` or `bottom`. Unset = keep the user's current `pane-border-status` (only turn it on, at `top`, if it was `off`). |
 | `@minimize-marker-style` | `flat` | `flat` (transparent chevrons in the border colour), `pill` (rounded coloured cap), or `none` (no indicator; leaves `pane-border-*` untouched). |
@@ -49,15 +50,15 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 
 | option | scope | written by | read by | lifecycle |
 |--------|-------|-----------|---------|-----------|
-| `@minimize_active` | pane | toggle / dashboard / restore-state | `apply` (→ MINSET), marker format, focus/resize hooks | set when a pane is minimized; cleared on un-minimize or when the user resizes the active pane taller. |
-| `@minimize_saved` | pane | toggle (on minimize), resize-while-peeked hook, dashboard ENTER | toggle (on un-minimize), `peekin` (peek height) | the pane's height *before* minimizing — the size it restores/peeks to. |
-| `@minimize_saved_w` | pane | toggle (on minimize), dashboard ENTER | `apply` (→ SAVEDW, restore a narrowed stack's width) | the pane's width before a fully-minimized stack narrowed. |
+| `@minimize_active` | pane | toggle / minimize-others / restore-state | `apply` (→ MINSET), marker format, focus/resize hooks | set when a pane is minimized; cleared on un-minimize or when the user resizes the active pane taller. |
+| `@minimize_saved` | pane | toggle (on minimize), resize-while-peeked hook, minimize-others ENTER | toggle (on un-minimize), `peekin` (peek height) | the pane's height *before* minimizing — the size it restores/peeks to. |
+| `@minimize_saved_w` | pane | toggle (on minimize), minimize-others ENTER | `apply` (→ SAVEDW, restore a narrowed stack's width) | the pane's width before a fully-minimized stack narrowed. |
 | `@minimize_minh` | pane | `dragend`, `minh-set/grow/shrink` | `apply` (→ MINH map) | per-pane custom minimized height; **cleared on un-minimize** (per-minimize-session). |
 | `@minimize_minw` | pane | `dragend` (side-border drag on a fully-minimized group) | `apply` (→ MINW map) | custom minimized **width** for a fully-minimized vertical group, stored on each member pane and shared by the group. **Persists** (not cleared on un-minimize) so the group keeps its width; also saved/restored by resurrect. |
 | `@minimize_peek` | pane | `peekin` (set) / `peekout` (unset) | `apply` (excluded from MINSET while peeking), focus hooks | transient: set only while a minimized pane is focused and expanded. Not persisted. |
-| `@minimize_dashboard` | pane | dashboard ENTER | dashboard EXIT (which panes WE minimized) | flags panes minimized *by* dashboard so user-minimized panes survive the round trip. Cleared on EXIT. |
-| `@minimize_dashboard_layout` | window | dashboard ENTER | dashboard EXIT (verbatim restore) | the exact `window_layout` saved on ENTER; unset on EXIT. |
-| `@minimize_guard` | global | `apply`, `dashboard` | the `after-resize-pane` hooks | transient mutex flag: set while the plugin runs its own `select-layout`/`resize-pane` so the resize hooks don't mistake them for a user resize. |
+| `@minimize_others` | pane | minimize-others ENTER | minimize-others EXIT (which panes WE minimized) | flags panes minimized *by* minimize-others so user-minimized panes survive the round trip. Cleared on EXIT. |
+| `@minimize_others_layout` | window | minimize-others ENTER | minimize-others EXIT (verbatim restore) | the exact `window_layout` saved on ENTER; unset on EXIT. |
+| `@minimize_guard` | global | `apply`, `minimize-others` | the `after-resize-pane` hooks | transient mutex flag: set while the plugin runs its own `select-layout`/`resize-pane` so the resize hooks don't mistake them for a user resize. |
 | `@minimize_orig_format` | global | `pane-minimize.tmux` at load (once) | same | the user's `pane-border-format` captured before the marker was first appended, so reloads re-augment from the original instead of doubling the marker. |
 | `@minimize_marker_installed` | global | `pane-minimize.tmux` at load (once) | same | guard so `@minimize_orig_format` is captured exactly once across reloads. |
 
@@ -76,10 +77,10 @@ engine is validated against, and is what the offline property suite exhaustively
 ## Out-of-band state
 
 - **Resurrect sidecar** — `${@resurrect-dir:-~/.tmux/resurrect}/tmux-pane-minimize.state`.
-  One TAB line per minimized pane (`session  window  pane  saved  saved_w  minh`), keyed by
+  One TAB line per minimized pane (`session  window  pane  saved  saved_w  minh  minw`), keyed by
   resurrect's stable `session:window.pane_index` identity. Written by `save-state`, replayed
   by `restore-state`, both wired to resurrect's `post-save-all`/`post-restore-all` hooks when
-  `@minimize-resurrect on`. Peek and dashboard grouping are intentionally **not** persisted.
+  `@minimize-resurrect on`. Peek and minimize-others grouping are intentionally **not** persisted.
 - **Per-window lock** — `${TMPDIR:-/tmp}/tmux-min-<window>.lock/` (an atomic `mkdir`
   mutex; macOS has no `flock`). Serializes `toggle`/`peekin`/`peekout`/`repin`/… so the
   focus/resize hooks (which fire concurrent `run-shell -b` copies) can't interleave applies.
@@ -100,7 +101,7 @@ already there rather than clobbering. Audit of everything outside our namespace:
 | `after-resize-pane` (×2) / `after-resize-window` hooks | **append** (`_add_hook`), idempotent | same — preserves existing resize hooks |
 | `@resurrect-hook-post-save-all` / `-post-restore-all` | **chain** (`existing ; ours`) via `_add_resurrect_hook`, idempotent on `$SCRIPT` | preserves a resurrect hook you already set; ours runs after |
 | `pane-border-status` / `pane-border-format` | only in the **zero-config augment** path; respects existing position, remembers the original. If you embed `@minimize-indicator` in your own format, or set `@minimize-marker-style none`, the plugin does **not** touch them | opt-out by design |
-| `@minimize-key` + opt-in keys (`MouseDragEnd1Border`, dashboard/minh keys) | **replace** (binding a key is replacing) | accepted: binding the key is the user's explicit request. The mouse-border-drag bind has no tmux default. |
+| `@minimize-key` + opt-in keys (`MouseDragEnd1Border`, minimize-others/minh keys) | **replace** (binding a key is replacing) | accepted: binding the key is the user's explicit request. The mouse-border-drag bind has no tmux default. |
 
 Refreshing an *appended* hook after its command changes needs a server restart (or
 `set-hook -gu <event>`), since we can't remove just our entry without rebuilding the array —

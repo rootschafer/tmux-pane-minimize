@@ -10,17 +10,27 @@ Features:
 - **Toggle** any pane minimized/restored (`prefix + Ctrl-t` by default).
 - **Peek on focus** — selecting a minimized pane temporarily expands it; moving away
   re-collapses it.
+- **Width-collapse** — minimize *every* pane in a vertical stack and the whole column
+  narrows to `@minimize-width`, letting its neighbour widen to fill.
 - **Per-pane minimized height** — drag a minimized pane's border, or use keys, to give
   it its own height.
-- **Dashboard view** — one key minimizes everything except the active pane; press again
+- **Per-group minimized width** — drag the side border of a fully-minimized column to set
+  its width; it persists for the life of the group (and across restarts).
+- **Minimize others** — one key minimizes everything except the active pane; press again
   to restore.
 - **Survives [tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect)** — minimized
-  state is persisted across a save/restore.
+  state (including custom heights/widths) is persisted across a save/restore.
+- **Compiled engine** — the layout math runs in a tiny zero-dependency Rust binary; the
+  bash side is just tmux glue.
 
 A minimized pane is forgotten automatically when *you* resize it (toggle key, border
 drag, or resize keys) — but **not** when the terminal window itself is resized.
 
 ![status: works on tmux 3.0+](https://img.shields.io/badge/tmux-3.0%2B-green)
+
+<!-- TODO(hero gif): the headline demo, looping, ~5s. A 3-pane window; toggle one pane
+     minimized (it collapses, the others reflow), toggle it back. This is the "what is this"
+     graphic — put the most legible single interaction here. Script: docs/recordings/00-hero.md -->
 
 ## Install
 
@@ -57,13 +67,13 @@ programs.tmux.extraConfig = ''
 Pin/update with `nix flake update tmux-pane-minimize`.
 
 ### Building the engine
-The layout math runs in a small compiled Rust engine (`engine-rs/`, binary
+The layout math runs in a small compiled Rust engine (the `engine-rs/` crate, binary
 `tmux-min-transform`) — it has zero dependencies, so the build is fast and offline:
 ```sh
-cargo build --release --manifest-path engine-rs/Cargo.toml
+cargo build --release          # from the repo root (cargo workspace; no --manifest-path needed)
 ```
 The plugin finds the binary via `$TMUX_MIN_TRANSFORM`, then your `PATH`, then the
-`engine-rs/target/release` build above. For a TPM/manual install, build it once (or put
+`target/release` build above. For a TPM/manual install, build it once (or put
 `tmux-min-transform` on your `PATH`); set `TMUX_MIN_TRANSFORM` to an explicit path if you
 install the binary elsewhere. On Nix, build it with `rustPlatform.buildRustPackage` and
 `set-environment -g TMUX_MIN_TRANSFORM <store-path>/bin/tmux-min-transform` before loading
@@ -88,12 +98,16 @@ rows, default 3) and its previous size. Re-bind with `@minimize-key`.
 ```
 
 ### Peek on focus
+<!-- TODO(gif, <5s, inline): a minimized pane; move focus INTO it (it expands to its saved
+     height), move focus AWAY (it re-collapses). Loop it. -->
 Selecting a minimized pane temporarily expands it to its saved height so you can glance
 at it; moving focus away re-collapses it. On by default — set `@minimize-peek 'off'` to
 disable. (Requires `focus-events on`, which most configs already set.) Resizing a pane
 while it's peeked updates its saved height.
 
 ### Per-pane minimized height
+<!-- TODO(gif, <5s, inline): a stack of minimized panes; drag one non-active pane's border
+     down — only that pane grows taller, the rest stay collapsed. -->
 Different minimized panes can have different heights. Drag the border of a
 **non-active** minimized pane (one that isn't focused) and its new height becomes that
 pane's minimized height — it stays minimized rather than expanding. You can also bind
@@ -103,14 +117,19 @@ height, as before. A custom height lasts until the pane is un-minimized, then re
 the global `@minimize-height`.
 
 ### Per-group minimized width
+<!-- TODO(video >5s → docs/recordings/03-per-group-width.md): fully minimize a column (it
+     narrows), focus away, drag its side border wider; show it sticks across a window resize. -->
 When **every** pane in a vertical stack is minimized, the whole column narrows to
 `@minimize-width`. If that group has no focused pane, drag its **side** border and the new
 width becomes the group's custom minimized width — shared by every pane in the stack. Unlike
 the per-pane height, this width **persists** as long as the group exists (across resizes,
 un-minimize/re-minimize, and tmux-resurrect restarts), so a column you like wider stays wider.
 
-### Dashboard view (minimize all but active)
-Bind `@minimize-dashboard-key` to collapse every pane in the window except the active
+### Minimize others (focus the active pane)
+<!-- TODO(video >5s → docs/recordings/02-minimize-others.md): a busy 4-pane window; press the
+     key (everything but the active pane collapses to strips); press again (exact layout
+     restored). Show a pre-minimized pane surviving the round trip. -->
+Bind `@minimize-others-key` to collapse every pane in the window except the active
 one into minimized strips — a quick "focus on this pane" view. Press it again to
 restore the previous layout exactly. Panes you had already minimized yourself stay
 minimized through the round trip.
@@ -125,10 +144,79 @@ hooks resurrect's save/restore to persist that state, keyed by
 `@resurrect-hook-post-restore-all` — if you already set those hooks yourself, they're
 preserved (ours runs after, via resurrect's `eval`), so you don't need to disable anything.
 Set `@minimize-resurrect 'off'` to opt out entirely and call `scripts/tmux-min.sh
-save-state` / `restore-state` from your own hooks. (Peek and the dashboard grouping are
+save-state` / `restore-state` from your own hooks. (Peek and the minimize-others grouping are
 transient and aren't persisted.)
 
-## Options
+## Configuration
+
+### Recommended configuration
+A complete, copy-paste setup that gives the experience in the demos above: a toggle key plus
+"minimize others", per-pane height keys, the **pill** indicator embedded in your own pane
+border, and a right-click pane menu. Drop this in `~/.tmux.conf` (adjust paths/colours/keys).
+
+<!-- TODO(screenshot): a labelled still of a window using this config — one normal pane, one
+     minimized (pill indicator visible on its border), one fully-minimized narrow column.
+     Caption the pill, the index, and the narrow column. -->
+
+```tmux
+# --- tmux-pane-minimize: keys (prefix table) -------------------------------------
+set -g @minimize-key             'C-t'  # toggle minimize on the active pane
+set -g @minimize-others-key      'M'    # minimize every pane but the active one (toggle)
+set -g @minimize-minh-grow-key   '+'    # grow a minimized pane's height
+set -g @minimize-minh-shrink-key '_'    # shrink it
+set -g @minimize-minh-reset-key  'R'    # reset its height to @minimize-height
+set -g @minimize-minw-reset-key  'W'    # reset a minimized group's custom width
+
+set -g @minimize-height 3               # comfortable minimized height (rows)
+set -g @minimize-width  30              # width a fully-minimized column narrows to
+
+# Mouse + focus enable the right-click menu, border-drag sizing, and peek-on-focus.
+set -g mouse on
+set -g focus-events on
+
+# --- Pane borders + the minimized indicator --------------------------------------
+# Own your border format and EMBED the plugin's indicator on minimized panes. Because the
+# format references @minimize-indicator, the plugin leaves your border styling fully alone.
+set -g pane-border-status top
+set -g pane-border-lines heavy
+set -g pane-border-style        'fg=colour14'   # your inactive border colour
+set -g pane-active-border-style 'fg=colour48'   # your active border colour
+set -g @minimize-marker-style pill              # indicator look: pill | flat | none
+set -g pane-border-format '#[align=left] #{pane_index}#{?#{==:#{pane_title},#{host}},,: #{pane_title}} #{?@minimize_active,#{E:#{@minimize-indicator}},}'
+
+# Load the plugin LAST — after the border colours above — so the pill derives its background
+# from them. (TPM users: this `run-shell` is instead `set -g @plugin '…'` — see Install.)
+run-shell ~/.tmux/plugins/tmux-pane-minimize/pane-minimize.tmux
+```
+
+#### Right-click pane menu (optional)
+Adds Minimize / Un-Minimize and Minimize Others to a right-click menu, alongside the usual
+pane actions. Point the `run-shell` paths at wherever the plugin lives.
+
+<!-- TODO(gif): right-click a pane → menu opens → click "Minimize" → pane collapses. ~4s, can
+     be an inline gif (under 5s). Circle the "Minimize" item on open. -->
+
+```tmux
+bind-key -T root MouseDown3Pane \
+  display-menu -t = -x M -y M -T "#[align=centre]#{pane_index}" \
+    "#{?@minimize_active,Un-Minimize,Minimize}" m \
+      "run-shell '~/.tmux/plugins/tmux-pane-minimize/scripts/tmux-min.sh toggle #{pane_id}'" \
+    "Minimize Others" a \
+      "run-shell '~/.tmux/plugins/tmux-pane-minimize/scripts/tmux-min.sh minimize-others #{pane_id}'" \
+    "" \
+    "Horizontal Split" h "split-window -h" \
+    "Vertical Split"   v "split-window -v" \
+    "#{?window_zoomed_flag,Unzoom,Zoom}" z "resize-pane -Z" \
+    "" \
+    "Kill" X "kill-pane"
+```
+
+> **Nix / Home Manager users:** put the blocks above in `programs.tmux.extraConfig`, and use
+> the plugin's flake package so the engine is built for you — see
+> [Nix (flake)](#nix-flake). Reference the engine paths via the package store path rather than
+> `~/.tmux/plugins/…`.
+
+### All options
 ```tmux
 set -g @minimize-key 'C-t'          # toggle key (prefix table)
 set -g @minimize-height '3'         # minimized height in rows
@@ -166,24 +254,15 @@ set -g @minimize-minh-step       '1'  # rows per grow/shrink press
 set -g @minimize-minh-grow-key   ''   # e.g. '+'  grow focused pane's minimized height
 set -g @minimize-minh-shrink-key ''   # e.g. '-'  shrink it
 set -g @minimize-minh-reset-key  ''   # e.g. '0'  reset it to @minimize-height
+set -g @minimize-minw-reset-key  ''   # e.g. 'W'  reset a minimized group's custom width
 
-set -g @minimize-dashboard-key   ''   # e.g. 'M'  minimize all panes but the active one
+set -g @minimize-others-key   ''   # e.g. 'M'  minimize all panes but the active one
 
 set -g @minimize-resurrect 'on'       # persist minimized state across tmux-resurrect
                                       # save/restore (chains onto your resurrect hooks,
                                       # preserving them; 'off' to opt out — see below)
 ```
-A typical setup that turns on the optional keys:
-```tmux
-set -g @minimize-key 'C-t'              # prefix + C-t  toggle minimize
-set -g @minimize-dashboard-key 'M'      # prefix + M    minimize all but the active pane
-set -g @minimize-minh-grow-key '+'      # prefix + +    taller minimized height
-set -g @minimize-minh-shrink-key '-'    # prefix + -    shorter
-set -g @minimize-minh-reset-key '0'     # prefix + 0    back to @minimize-height
-set -g @minimize-marker-style 'pill'    # 'flat' (default) or 'pill'
-set -g mouse on                         # for the right-click menu + border-drag sizing
-```
-Only `@minimize-key` is bound by default; the grow/shrink/reset and dashboard keys are
+Only `@minimize-key` is bound by default; the grow/shrink/reset and minimize-others keys are
 opt-in (empty until you set them). The marker and resurrect persistence are on by default.
 
 ### About the marker
@@ -248,7 +327,7 @@ pane won't kick you out of zoom. Minimizing the zoomed pane itself does exit zoo
 State is kept in per-pane options: `@minimize_active` (is it minimized),
 `@minimize_saved` / `@minimize_saved_w` (pre-minimize height / pre-narrow width),
 `@minimize_peek` (currently peeked), `@minimize_minh` (per-pane custom height), and
-`@minimize_dashboard` (minimized by the dashboard key). A transient global
+`@minimize_others` (minimized by the minimize-others key). A transient global
 `@minimize_guard` suppresses the resize hooks during the plugin's own resizes, and a
 per-window `mkdir` lock serialises the engine so the backgrounded focus/resize hooks
 can't apply conflicting layouts. (Note: the engine names use an underscore,
@@ -273,6 +352,21 @@ also needs `set -g mouse on`.
   manually) only checks height. Manually dragging a narrowed vertical stack wider
   won't clear its saved widths, so a subsequent full-minimize/restore cycle might
   restore a stale width.
+- **Repeated/empty prompts may appear in a pane after many minimize/peek cycles — with some
+  prompt frameworks.** This is **not** the plugin sending keystrokes (it never injects input —
+  only resizes panes). Every resize sends the pane a `SIGWINCH`; a shell sitting at its prompt
+  re-renders it in response. A *default* shell (`zsh`/`bash`) redraws in place — only the
+  scrollback grows, which is harmless. But an **asynchronous / self-reprinting prompt** (e.g.
+  Spaceship with `SPACESHIP_PROMPT_ASYNC=true`, and some `powerlevel10k`/transient-prompt
+  setups) redraws via `zle reset-prompt` on each `SIGWINCH`/focus event, and the resize +
+  async redraw can leave the *same* prompt rendered several times (tell-tale sign: the stacked
+  prompts all show the **same** command-duration, i.e. one prompt re-rendered, not several
+  commands). It predates this plugin — any resize triggers it — but minimize/peek resize far
+  more often. Fixes, in order of leverage:
+  - **`set -g @minimize-peek off`** — peek resizes on *every* focus change, the dominant source.
+  - Tame the prompt's resize behaviour: e.g. `SPACESHIP_PROMPT_ASYNC=false`, or a prompt that
+    redraws cleanly on `SIGWINCH`.
+  - (The plugin already skips no-op resizes, so it won't churn when nothing actually changed.)
 
 ## License
 MIT

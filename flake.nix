@@ -31,6 +31,15 @@
         }
       );
 
+      # `nix flake check` builds these. The engine is a buildRustPackage, so its checkPhase
+      # runs `cargo test` — the pure oracle suite in engine-rs/src/lib.rs (no tmux needed) —
+      # and `plugin` assembles the full output. (CI is intentionally not wired; this is the
+      # local/`nix flake check` gate.)
+      checks = forAll (system: {
+        engine = self.packages.${system}.tmux-min-transform;
+        plugin = self.packages.${system}.tmux-pane-minimize;
+      });
+
       formatter = forAll (system: nixpkgs.legacyPackages.${system}.nixfmt-rfc-style);
     };
 }

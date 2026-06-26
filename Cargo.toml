@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "engine-rs",
+]
+default-members = ["engine-rs"]
+resolver = "3"

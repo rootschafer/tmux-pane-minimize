@@ -34,8 +34,8 @@ if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo not found — skipping live suite (needs the Rust engine)"
   exit 0
 fi
-RUST_BIN="$LS_DIR/../engine-rs/target/release/tmux-min-transform"
-( cd "$LS_DIR/../engine-rs" && cargo build --release >/dev/null 2>&1 ) || {
+RUST_BIN="$LS_DIR/../target/release/tmux-min-transform"
+( cd "$LS_DIR/.." && cargo build --release >/dev/null 2>&1 ) || {
   echo "cargo build failed — skipping live suite"; exit 0; }
 export TMUX_MIN_TRANSFORM="$RUST_BIN"
 
@@ -198,9 +198,13 @@ part3() {
   # at entry; the mkdir can only FAIL if another apply already holds it -> a real
   # overlap. rmdir at the end of the critical section. With the per-window lock this
   # must never collide.
+  # Release the busy marker at apply()'s REAL exit — the guard-clear (set-option -gu
+  # @minimize_guard) — not at select-layout, because apply() has early-return paths (a no-op
+  # layout, or a transform failure) that clear the guard without ever reaching select-layout.
+  # Every apply() exit clears the guard, so this releases on all paths.
   awk -v busy="$busy" -v coll="$coll" '
     /^apply\(\) \{/ { print; getline; print; print "  mkdir \"" busy "\" 2>/dev/null || echo OVERLAP >> \"" coll "\""; next }
-    /select-layout -t "\$win" "\$new"/ { print; print "  rmdir \"" busy "\" 2>/dev/null"; next }
+    /set-option -gu @minimize_guard/ { print; print "  rmdir \"" busy "\" 2>/dev/null"; next }
     { print }
   ' "$ENGINE" > "$eng2"
 
@@ -329,10 +333,18 @@ part_minw() {
   w=$(T display-message -p -t "$rtop" '#{pane_width}')
   if [ "$w" = 60 ]; then ok "p4b custom width persists across un/re-minimize"; else bad "p4b after re-minimize width=$w (expected 60)"; fi
   assert_live "p4b after re-minimize"
+
+  # minw-reset snaps the group back to MIN_W and clears @minimize_minw on every member
+  bash "$ENGINE" minw-reset "$rtop"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 30 ]; then ok "p4b minw-reset -> MIN_W(30)"; else bad "p4b after minw-reset width=$w (expected 30)"; fi
+  mw=$(T show-options -t "$rbot" -pqv @minimize_minw 2>/dev/null || true)
+  if [ -z "$mw" ]; then ok "p4b minw-reset cleared @minimize_minw across the group"; else bad "p4b rbot still has @minimize_minw=$mw"; fi
+  assert_live "p4b after minw-reset"
 }
 
-# --- Part 5: dashboard (minimize all but active) ----------------------------
-part_dashboard() {
+# --- Part 5: minimize-others (minimize all but active) ----------------------------
+part_minimize_others() {
   local win act orig now nmin top bot dflag
 
   T kill-server >/dev/null 2>&1
@@ -343,21 +355,21 @@ part_dashboard() {
   orig=$(T display-message -p '#{window_layout}')
   assert_live "p5 initial 4 panes"
 
-  bash "$ENGINE" dashboard "$act"
-  assert_live "p5 dashboard entered"
+  bash "$ENGINE" minimize-others "$act"
+  assert_live "p5 minimize-others entered"
   nmin=$(T list-panes -F '#{@minimize_active}' | grep -c 1 || true); : "${nmin:=0}"
   if [ "$nmin" = 3 ]; then ok "p5 3 non-active panes minimized"; else bad "p5 minimized count=$nmin (expected 3)"; fi
 
-  bash "$ENGINE" dashboard "$act"
+  bash "$ENGINE" minimize-others "$act"
   now=$(T display-message -p '#{window_layout}')
   if [ "$orig" = "$now" ]; then ok "p5 exact layout restore on exit"; else bad "p5 not restored:
     orig=$orig
     now =$now"; fi
   nmin=$(T list-panes -F '#{@minimize_active}' | grep -c 1 || true); : "${nmin:=0}"
   if [ "$nmin" = 0 ]; then ok "p5 all flags cleared on exit"; else bad "p5 $nmin panes still minimized after exit"; fi
-  assert_live "p5 dashboard exited"
+  assert_live "p5 minimize-others exited"
 
-  # A pane the user minimized BEFORE entering dashboard must survive the round trip.
+  # A pane the user minimized BEFORE entering minimize-others must survive the round trip.
   T kill-server >/dev/null 2>&1
   T new-session -d -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0                          # 3 panes
@@ -365,29 +377,29 @@ part_dashboard() {
   bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
   bash "$ENGINE" toggle "$top"           # user-minimize the top pane
   T select-pane -t "$bot"
-  bash "$ENGINE" dashboard "$bot"        # enter dashboard from bottom
-  dflag=$(T show-options -t "$top" -pqv @minimize_dashboard 2>/dev/null || true)
-  if [ -z "$dflag" ]; then ok "p5 pre-minimized pane not dashboard-flagged"; else bad "p5 pre-min pane wrongly flagged"; fi
-  bash "$ENGINE" dashboard "$bot"        # exit dashboard
+  bash "$ENGINE" minimize-others "$bot"        # enter minimize-others from bottom
+  dflag=$(T show-options -t "$top" -pqv @minimize_others 2>/dev/null || true)
+  if [ -z "$dflag" ]; then ok "p5 pre-minimized pane not minimize-others-flagged"; else bad "p5 pre-min pane wrongly flagged"; fi
+  bash "$ENGINE" minimize-others "$bot"        # exit minimize-others
   if [ "$(T display-message -p -t "$top" '#{?@minimize_active,1,0}')" = 1 ]; then
     ok "p5 pre-minimized pane still minimized after exit"
   else bad "p5 pre-minimized pane lost its minimized state"; fi
   assert_live "p5 pre-minimized preserved"
 
-  # Zoom is preserved across a dashboard round trip: the verbatim restore goes through
-  # _rezoom (shared with apply()), so zooming the active pane inside the dashboard view
+  # Zoom is preserved across a minimize-others round trip: the verbatim restore goes through
+  # _rezoom (shared with apply()), so zooming the active pane inside the minimize-others view
   # and then exiting must keep the window zoomed.
   T kill-server >/dev/null 2>&1
   T new-session -d -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0                          # 3 panes
   act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
-  bash "$ENGINE" dashboard "$act"        # enter dashboard
-  T resize-pane -Z -t "$act"             # zoom the active pane while in the dashboard view
+  bash "$ENGINE" minimize-others "$act"        # enter minimize-others
+  T resize-pane -Z -t "$act"             # zoom the active pane while in the minimize-others view
   [ "$(T display-message -p '#{window_zoomed_flag}')" = 1 ] || bad "p5 setup: zoom did not take"
-  bash "$ENGINE" dashboard "$act"        # exit dashboard -> should re-zoom
+  bash "$ENGINE" minimize-others "$act"        # exit minimize-others -> should re-zoom
   if [ "$(T display-message -p '#{window_zoomed_flag}')" = 1 ]; then
-    ok "p5 zoom preserved across dashboard round trip"
-  else bad "p5 lost zoom on dashboard exit"; fi
+    ok "p5 zoom preserved across minimize-others round trip"
+  else bad "p5 lost zoom on minimize-others exit"; fi
 }
 
 # --- Part 6: tmux-resurrect persistence (save-state/restore-state) -----------
@@ -613,7 +625,7 @@ main() {
   part3
   part_minh
   part_minw
-  part_dashboard
+  part_minimize_others
   part_peek
   part_resize_window
   part_marker

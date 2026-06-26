@@ -9,8 +9,7 @@
 set -u
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"   # repo root (scripts/..)
-ENGINE_DIR="$DIR/engine-rs"
-BIN="$ENGINE_DIR/target/release/tmux-min-transform"
+BIN="$DIR/target/release/tmux-min-transform"                 # cargo workspace target/ at repo root
 
 note() { tmux display-message "tmux-pane-minimize: $*" 2>/dev/null || true; }
 
@@ -19,7 +18,7 @@ note() { tmux display-message "tmux-pane-minimize: $*" 2>/dev/null || true; }
 [ -x "$DIR/scripts/tmux-min-transform" ] && exit 0          # Nix package (binary beside scripts)
 command -v tmux-min-transform >/dev/null 2>&1 && exit 0     # on PATH
 [ -x "$BIN" ] && exit 0                                     # prior cargo build
-[ -d "$ENGINE_DIR" ] || { note "engine source (engine-rs/) missing — cannot build"; exit 0; }
+[ -f "$DIR/Cargo.toml" ] || { note "engine source (Cargo.toml) missing — cannot build"; exit 0; }
 
 # Locate cargo: PATH, then a rustup install under ~/.cargo.
 CARGO=""
@@ -45,8 +44,8 @@ if [ -z "$CARGO" ]; then
 fi
 
 note "building the minimize engine (one-time)…"
-if "$CARGO" build --release --manifest-path "$ENGINE_DIR/Cargo.toml" >/dev/null 2>&1; then
+if ( cd "$DIR" && "$CARGO" build --release >/dev/null 2>&1 ); then
   note "minimize engine ready."
 else
-  note "engine build failed — run: cargo build --release --manifest-path engine-rs/Cargo.toml"
+  note "engine build failed — run: cargo build --release (from the repo root)"
 fi

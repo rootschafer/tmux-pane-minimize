@@ -15,7 +15,7 @@ SCRIPT="$CURRENT_DIR/scripts/tmux-min.sh"
 if [ -z "${TMUX_MIN_TRANSFORM:-}" ] \
    && [ ! -x "$CURRENT_DIR/scripts/tmux-min-transform" ] \
    && ! command -v tmux-min-transform >/dev/null 2>&1 \
-   && [ ! -x "$CURRENT_DIR/engine-rs/target/release/tmux-min-transform" ]; then
+   && [ ! -x "$CURRENT_DIR/target/release/tmux-min-transform" ]; then
   tmux run-shell -b "bash '$CURRENT_DIR/scripts/ensure-engine.sh'"
 fi
 
@@ -77,10 +77,15 @@ RESET_KEY="$(opt @minimize-minh-reset-key '')"
 [ -n "$SHRINK_KEY" ] && tmux bind-key "$SHRINK_KEY" run-shell "$SCRIPT minh-shrink #{pane_id} $MINH_STEP"
 [ -n "$RESET_KEY" ]  && tmux bind-key "$RESET_KEY"  run-shell "$SCRIPT minh-reset #{pane_id}"
 
-# Optional "dashboard" key (opt-in): minimize every pane except the active one; press
-# again to restore the previous layout. Suggested: set @minimize-dashboard-key 'M'.
-DASH_KEY="$(opt @minimize-dashboard-key '')"
-[ -n "$DASH_KEY" ] && tmux bind-key "$DASH_KEY" run-shell "$SCRIPT dashboard #{pane_id}"
+# Optional key to reset a fully-minimized group's custom WIDTH (set by side-border drag)
+# back to @minimize-width. Opt-in. Suggested: set @minimize-minw-reset-key 'W'.
+MINW_RESET_KEY="$(opt @minimize-minw-reset-key '')"
+[ -n "$MINW_RESET_KEY" ] && tmux bind-key "$MINW_RESET_KEY" run-shell "$SCRIPT minw-reset #{pane_id}"
+
+# Optional "minimize others" key (opt-in): minimize every pane except the active one; press
+# again to restore the previous layout. Suggested: set @minimize-others-key 'M'.
+OTHERS_KEY="$(opt @minimize-others-key '')"
+[ -n "$OTHERS_KEY" ] && tmux bind-key "$OTHERS_KEY" run-shell "$SCRIPT minimize-others #{pane_id}"
 
 # tmux-resurrect persistence (on by default; set @minimize-resurrect 'off' to disable).
 # resurrect restores #{window_layout} (minimized geometry) but not our per-pane options,

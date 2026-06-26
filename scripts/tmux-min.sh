@@ -30,8 +30,8 @@ if [ -z "$_BIN" ]; then
     _BIN="$_DIR/tmux-min-transform"                            # installed beside scripts (Nix package)
   elif command -v tmux-min-transform >/dev/null 2>&1; then
     _BIN="tmux-min-transform"                                  # on PATH
-  elif [ -x "$_DIR/../engine-rs/target/release/tmux-min-transform" ]; then
-    _BIN="$_DIR/../engine-rs/target/release/tmux-min-transform"  # cargo dev build
+  elif [ -x "$_DIR/../target/release/tmux-min-transform" ]; then
+    _BIN="$_DIR/../target/release/tmux-min-transform"  # cargo dev build (workspace target/ at repo root)
   fi
 fi
 
@@ -117,14 +117,24 @@ EOF
     tmux set-option -gu @minimize_guard   # don't leave the resize-hook guard stuck on
     return 1
   fi
+  # No-op guard: transform reproduces an already-correct layout byte-for-byte, so if `new`
+  # equals the current #{window_layout} there is nothing to do — and calling select-layout
+  # anyway would needlessly resize every pane (each gets a SIGWINCH, churning shell prompts)
+  # and un-zoom the window. Skip it; the zoom is already intact, so just clear the guard.
+  # The compare is a single cheap string test against data we already have.
+  if [ "$new" = "$layout" ]; then
+    tmux set-option -gu @minimize_guard
+    return 0
+  fi
   tmux select-layout -t "$win" "$new" \; set-option -gu @minimize_guard
   _rezoom "$zoomed" "$actpane" "$actmin"
+  return 0   # explicit: _rezoom's status is incidental — callers rely on apply's success/fail
 }
 
 # select-layout un-zooms the window. Re-zoom the active pane so a repin (terminal resize
-# while zoomed), a background minimize, or a dashboard restore doesn't kick you out of a
+# while zoomed), a background minimize, or a minimize-others restore doesn't kick you out of a
 # zoom — unless the active pane itself was the one minimized, where staying unzoomed is
-# correct. Shared by apply() and dashboard() so both preserve zoom identically.
+# correct. Shared by apply() and minimize_others() so both preserve zoom identically.
 _rezoom() {  # $1 was-zoomed  $2 active-pane-id  $3 active-pane-was-minimized
   [ "$1" = 1 ] && [ "$3" != 1 ] && [ -n "$2" ] && tmux resize-pane -Z -t "$2"
 }
@@ -140,12 +150,15 @@ toggle_pane() {
     tmux set-option -t "$pane" -p @minimize_active 0 \; \
          set-option -t "$pane" -pu @minimize_peek \; \
          set-option -t "$pane" -pu @minimize_minh        # custom min height is per-session
-    apply "$win" "$num" "$saved"
+    # Roll back to minimized if the layout couldn't be applied, so the pane never ends up
+    # marked un-minimized while still collapsed (or vice versa).
+    apply "$win" "$num" "$saved" || tmux set-option -t "$pane" -p @minimize_active 1
   else
     tmux set-option -t "$pane" -p @minimize_saved "$h" \; \
          set-option -t "$pane" -p @minimize_saved_w "$w" \; \
          set-option -t "$pane" -p @minimize_active 1
-    apply "$win"
+    apply "$win" || tmux set-option -t "$pane" -p @minimize_active 0 \; \
+         set-option -t "$pane" -pu @minimize_saved \; set-option -t "$pane" -pu @minimize_saved_w
   fi
   _unlock
 }
@@ -165,7 +178,7 @@ peekin() {
     num=${num#%}
     case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
     tmux set-option -t "$pane" -p @minimize_peek 1
-    apply "$win" "$num" "$saved"
+    apply "$win" "$num" "$saved" || tmux set-option -t "$pane" -pu @minimize_peek   # roll back
   fi
   _unlock
 }
@@ -177,7 +190,7 @@ peekout() {
   IFS='|' read -r peek pa <<<"$(tmux display-message -p -t "$pane" '#{?@minimize_peek,1,0}|#{pane_active}')"
   if [ "$peek" = 1 ] && [ "$pa" != 1 ]; then
     tmux set-option -t "$pane" -pu @minimize_peek
-    apply "$win"
+    apply "$win" || tmux set-option -t "$pane" -p @minimize_peek 1   # roll back
   fi
   _unlock
 }
@@ -258,22 +271,40 @@ reset_minh() {
   _unlock
 }
 
-# dashboard: toggle a "focus" view — minimize every pane in the window EXCEPT the
+# reset_minw: clear a fully-minimized group's custom width, snapping it back to @minimize-width.
+# The width is shared across the group (stored on every member), so clear @minimize_minw on
+# every pane in the target's column (panes in a vertical stack share pane_left), then re-pin.
+reset_minw() {
+  local pane="$1" win left id l
+  win=$(tmux display-message -p -t "$pane" '#{window_id}')
+  left=$(tmux display-message -p -t "$pane" '#{pane_left}')
+  _lock "$win"
+  while read -r id l; do
+    [ -z "$id" ] && continue
+    [ "$l" = "$left" ] && tmux set-option -t "$id" -pu @minimize_minw
+  done <<EOF
+$(tmux list-panes -t "$win" -F '#{pane_id} #{pane_left}')
+EOF
+  apply "$win"
+  _unlock
+}
+
+# minimize_others: toggle a "focus" view — minimize every pane in the window EXCEPT the
 # active one, then a second invocation restores the previous layout exactly.
-#  - ENTER: save the window layout to @minimize_dashboard_layout, then minimize every
+#  - ENTER: save the window layout to @minimize_others_layout, then minimize every
 #    pane that isn't the active one and isn't already minimized, flagging each with
-#    @minimize_dashboard so we know which ones WE minimized (user-minimized panes are
+#    @minimize_others so we know which ones WE minimized (user-minimized panes are
 #    left as-is and survive the round trip).
-#  - EXIT (saved layout present): clear flags on the dashboard panes and restore the
+#  - EXIT (saved layout present): clear flags on the minimized-others panes and restore the
 #    saved layout verbatim, so panes return to their exact prior sizes. Falls back to a
 #    normal recompute if the saved layout no longer fits (a pane was added/closed).
-dashboard() {
+minimize_others() {
   local pane="$1" win saved id pa ma ph pw dz dap dam
   local -a cmd
   win=$(tmux display-message -p -t "$pane" '#{window_id}')
   _lock "$win"
   tmux set-option -g @minimize_guard 1
-  saved=$(tmux show-options -wqv @minimize_dashboard_layout 2>/dev/null || true)
+  saved=$(tmux show-options -wqv @minimize_others_layout 2>/dev/null || true)
   if [ -n "$saved" ]; then
     # EXIT: clear the flags WE set, then restore the saved layout. Coalesced — all the
     # per-pane unsets go out in ONE chained tmux call (was 4 round-trips per pane).
@@ -284,12 +315,12 @@ dashboard() {
       cmd+=( set-option -t "$id" -p @minimize_active 0 ';'
              set-option -t "$id" -pu @minimize_peek ';'
              set-option -t "$id" -pu @minimize_minh ';'
-             set-option -t "$id" -pu @minimize_dashboard )
+             set-option -t "$id" -pu @minimize_others )
     done <<EOF
-$(tmux list-panes -t "$win" -F '#{?@minimize_dashboard,#{pane_id},}')
+$(tmux list-panes -t "$win" -F '#{?@minimize_others,#{pane_id},}')
 EOF
     [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
-    tmux set-option -wu @minimize_dashboard_layout
+    tmux set-option -wu @minimize_others_layout
     # Restore the exact prior layout verbatim (NOT via apply()'s recompute, which would
     # re-derive sizes). Read zoom + active-pane state in one call so we can preserve zoom
     # the same way apply() does. Fall back to a recompute if the saved layout no longer
@@ -307,7 +338,7 @@ EOF
     # already user-minimized (those survive the round trip). Coalesced — read all pane
     # state in ONE list-panes (was 3 display-messages per pane) and set all the flags in
     # ONE chained tmux call (was 4 set-options per pane).
-    tmux set-option -w @minimize_dashboard_layout "$(tmux display-message -p -t "$win" '#{window_layout}')"
+    tmux set-option -w @minimize_others_layout "$(tmux display-message -p -t "$win" '#{window_layout}')"
     cmd=()
     while IFS='|' read -r id pa ma ph pw; do
       [ -z "$id" ] && continue
@@ -317,12 +348,28 @@ EOF
       cmd+=( set-option -t "$id" -p @minimize_saved "$ph" ';'
              set-option -t "$id" -p @minimize_saved_w "$pw" ';'
              set-option -t "$id" -p @minimize_active 1 ';'
-             set-option -t "$id" -p @minimize_dashboard 1 )
+             set-option -t "$id" -p @minimize_others 1 )
     done <<EOF
 $(tmux list-panes -t "$win" -F '#{pane_id}|#{pane_active}|#{?@minimize_active,1,0}|#{pane_height}|#{pane_width}')
 EOF
     [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
-    apply "$win"
+    if ! apply "$win"; then
+      # Roll back the flags we just set so a failed apply doesn't leave a half-entered
+      # minimize-others view (panes marked minimized but full-size, with a stale saved layout).
+      cmd=()
+      while read -r id; do
+        [ -z "$id" ] && continue
+        [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+        cmd+=( set-option -t "$id" -p @minimize_active 0 ';'
+               set-option -t "$id" -pu @minimize_saved ';'
+               set-option -t "$id" -pu @minimize_saved_w ';'
+               set-option -t "$id" -pu @minimize_others )
+      done <<EOF
+$(tmux list-panes -t "$win" -F '#{?@minimize_others,#{pane_id},}')
+EOF
+      [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
+      tmux set-option -wu @minimize_others_layout
+    fi
   fi
   tmux set-option -gu @minimize_guard
   _unlock
@@ -334,7 +381,7 @@ EOF
 # minimized, and its pre-minimize size) are user options resurrect doesn't touch.
 # save-state/restore-state persist them in a sidecar keyed by session:window.pane_index
 # (the same stable identity resurrect uses), wired via resurrect's post-save/restore
-# hooks. Transient peek + dashboard grouping are intentionally not persisted.
+# hooks. Transient peek + minimize-others grouping are intentionally not persisted.
 _state_file() {
   local d
   d=$(tmux show-option -gqv @resurrect-dir 2>/dev/null || true)
@@ -357,7 +404,7 @@ restore_state() {
   # Read every live pane ONCE into a "target|window_id" table, so each saved entry is
   # resolved (does the pane still exist? which window?) by an in-shell lookup instead of
   # two display-message round-trips per entry. Then set all the per-pane options in ONE
-  # chained tmux call (same coalescing as dashboard()).
+  # chained tmux call (same coalescing as minimize_others()).
   panemap=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{window_id}' 2>/dev/null || true)
   cmd=()
   while IFS='	' read -r sess win pane saved savedw minh minw; do
@@ -387,13 +434,14 @@ case "${1:-}" in
   peekin)    peekin "$2" "${3:-}" ;;
   peekout)   peekout "$2" "${3:-}" ;;
   dragend)   dragend "$2" ;;
-  dashboard) dashboard "$2" ;;
+  minimize-others) minimize_others "$2" ;;
   save-state)    save_state "${2:-}" ;;
   restore-state) restore_state "${2:-}" ;;
   minh-set)    set_minh "$2" "$3" ;;
   minh-grow)   adjust_minh "$2" "$3" ;;
   minh-shrink) adjust_minh "$2" "-$3" ;;
   minh-reset)  reset_minh "$2" ;;
+  minw-reset)  reset_minw "$2" ;;
   repin)
     _lock "$2"; apply "$2"; _unlock ;;
   selftest)

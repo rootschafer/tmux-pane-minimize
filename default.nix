@@ -13,13 +13,20 @@
   stdenvNoCC,
 }:
 let
+  # The Rust crate lives in engine-rs/ within a cargo workspace whose root (Cargo.toml +
+  # Cargo.lock) and target/ are at the repo root. Build the workspace from the repo root,
+  # filtered to drop target/ and .git so a local `nix-build` stays pure and fast (the flake
+  # path already only sees git-tracked files).
   engine = rustPlatform.buildRustPackage {
     pname = "tmux-min-transform";
     version = "0.1.0";
-    src = ./engine-rs;
+    src = lib.cleanSourceWith {
+      src = ./.;
+      filter = path: _type: let b = baseNameOf path; in b != "target" && b != ".git";
+    };
     # The engine has ZERO dependencies, so the lockfile vendors nothing — no cargoHash,
     # no network fetch. (Note: Cargo edition = 2024, needs rustc >= 1.85 / recent nixpkgs.)
-    cargoLock.lockFile = ./engine-rs/Cargo.lock;
+    cargoLock.lockFile = ./Cargo.lock;
   };
 in
 stdenvNoCC.mkDerivation {

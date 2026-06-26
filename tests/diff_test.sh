@@ -4,10 +4,10 @@ set -eu
 
 DT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 BASH_DRIVER="$DT_DIR/transform_cli.sh"
-RUST_BIN="$DT_DIR/../engine-rs/target/release/tmux-min-transform"
+RUST_BIN="$DT_DIR/../target/release/tmux-min-transform"
 
-# Build Rust binary first
-(cd "$DT_DIR/../engine-rs" && cargo build --release)
+# Build Rust binary first (cargo workspace; build from the repo root)
+(cd "$DT_DIR/.." && cargo build --release)
 
 MIN_H=3
 MIN_W=15
@@ -133,5 +133,10 @@ for mw in 10 25 50 99 200; do
   # not fully minimized -> custom width must be ignored
   diff_one off 1 "$WL" " 4 " " " "" 0 " " " 4:${mw} "
 done
+# two independent fully-minimized groups (col1=1,2 col2=3,4) beside a flexible leaf (0):
+# each group narrows to its OWN custom width; the leaf absorbs the rest.
+ML="0000,200x60,0,0{98x60,0,0,0,50x60,99,0[50x30,99,0,1,50x29,99,31,2],50x60,150,0[50x30,150,0,3,50x29,150,31,4]}"
+diff_one off 1 "$ML" " 1 2 3 4 " " " "" 0 " " " 1:30 3:60 "
+diff_one off 1 "$ML" " 1 2 3 4 " " " "" 0 " " " 1:60 3:20 "
 
 echo "DIFFERENTIAL TESTS PASSED: $PASSED cases compared successfully."

@@ -25,13 +25,14 @@ is what makes the bulk of the tests exhaustive and deterministic. It now lives i
 (`engine-rs/`, binary **`tmux-min-transform`**); `scripts/transform.sh` is a byte-for-byte
 bash equivalent kept ONLY as the test oracle the Rust engine is validated against (see
 `tests/diff_test.sh`). `scripts/tmux-min.sh` is the thin orchestration layer: everything that
-touches tmux (toggle/peek/dashboard/save-state/…) reads state, calls the binary via its
+touches tmux (toggle/peek/minimize-others/save-state/…) reads state, calls the binary via its
 `_transform()` wrapper, and applies the result with `select-layout`. It locates the binary via
 `TMUX_MIN_TRANSFORM`, then `PATH`, then the `engine-rs/target/release` dev build, and hard-fails
 if none is found (there is no bash fallback — `transform.sh` is the oracle only).
 
-Build the engine with `cargo build --release` in `engine-rs/` (the test harnesses do this for
-you). It has zero dependencies, so the build is fast and offline.
+Build the engine with `cargo build --release` from the repo root (it's a cargo workspace whose
+only member is `engine-rs/`, so no `--manifest-path` is needed and `target/` lives at the root;
+the test harnesses build it for you). It has zero dependencies, so the build is fast and offline.
 
 See **STATE.md** for the option model (the `@minimize-*` config vs `@minimize_*` runtime
 convention, and each option's scope/writer/reader/lifecycle).
@@ -54,8 +55,8 @@ QUICK=1 tests/run.sh    # offline: skip the WPANE/WVAL inner sweep (fast iterati
 VERBOSE=1 tests/run.sh  # also print every passing assertion
 
 # the Rust engine
-cargo test  --manifest-path engine-rs/Cargo.toml   # native unit tests (oracle cases, no bash)
-cargo build --release --manifest-path engine-rs/Cargo.toml
+cargo test                            # native unit tests (oracle cases, no bash) — from repo root
+cargo build --release                 # builds the engine-rs crate -> target/release/tmux-min-transform
 /bin/bash tests/diff_test.sh           # differential: Rust binary vs bash oracle, byte-for-byte
 QUICK=1 /bin/bash tests/diff_test.sh   # ... skip the WVAL inner sweep (fast)
 
