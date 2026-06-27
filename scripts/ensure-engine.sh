@@ -20,6 +20,15 @@ command -v tmux-min-transform >/dev/null 2>&1 && exit 0     # on PATH
 [ -x "$BIN" ] && exit 0                                     # prior cargo build
 [ -f "$DIR/Cargo.toml" ] || { note "engine source (Cargo.toml) missing — cannot build"; exit 0; }
 
+# A read-only source tree means we're loaded from a Nix store path (or similar)
+# without the engine prebuilt — cargo can't write target/. The real fix is on
+# the packaging side (callPackage the plugin's default.nix instead of pointing
+# tmux at the raw source), not building here. Bail with a pointer.
+if [ ! -w "$DIR" ]; then
+  note "engine missing and source is read-only ($DIR) — Nix install needs to build via default.nix"
+  exit 0
+fi
+
 # Locate cargo: PATH, then a rustup install under ~/.cargo.
 CARGO=""
 if command -v cargo >/dev/null 2>&1; then
@@ -44,8 +53,12 @@ if [ -z "$CARGO" ]; then
 fi
 
 note "building the minimize engine (one-time)…"
-if ( cd "$DIR" && "$CARGO" build --release >/dev/null 2>&1 ); then
+LOG="${TMPDIR:-/tmp}/tmux-min-build.log"
+if ( cd "$DIR" && "$CARGO" build --release ) >"$LOG" 2>&1; then
   note "minimize engine ready."
 else
-  note "engine build failed — run: cargo build --release (from the repo root)"
+  # Surface the last line of cargo's output so the failure isn't opaque; full
+  # log stays at $LOG for the user to inspect.
+  tail="$(tail -n1 "$LOG" 2>/dev/null)"
+  note "engine build failed (${tail:-see $LOG}) — full log: $LOG"
 fi
