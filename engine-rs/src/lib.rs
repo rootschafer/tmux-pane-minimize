@@ -233,6 +233,17 @@ impl Node {
 
     fn fixed_width(&self, minset: &str, savedw: &str, minw: &str, min_w: i32) -> i32 {
         if let NodeType::VSplit { .. } = &self.node_type {
+            // min_w<=0 is the sentinel for "width-narrowing disabled" (@minimize-narrow=off).
+            // Never fix the width — except widen a previously narrowed group back to its
+            // saved pre-narrow width, so toggling off restores the natural layout.
+            if min_w <= 0 {
+                if self.fully_min(minset) {
+                    if let Some(sw) = self.savedw_of(savedw) {
+                        return sw;
+                    }
+                }
+                return -1;
+            }
             // The group's custom minimized width (any leaf carries it), else the global MIN_W.
             // Used both as the fully-minimized width and the narrowed-detection threshold.
             let mw = self.minw_of(minw).unwrap_or(min_w);
@@ -762,6 +773,14 @@ mod tests {
         ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " ", "", 0, " ", " 96:50 "), "9150,254x67,0,0{203x67,0,0,95,50x67,204,0[50x16,204,0,96,50x16,204,17,98,50x33,204,34,97]}"),
         // custom min width ignored if not fully-min
         ((3, 30, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 ", " ", "", 0, " ", " 96:50 "), "3a09,254x67,0,0{127x67,0,0,95,126x67,128,0[126x3,128,0,96,126x20,128,4,98,126x42,128,25,97]}"),
+        // MIN_W=0 sentinel (@minimize-narrow off): fully-min group, no savedw -> stays flex (widths unchanged)
+        ((3, 0, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " ", "", 0, " ", " "), "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}"),
+        // MIN_W=0 sentinel, currently-narrow group + savedw=120 -> widens back to 120 on toggle-off
+        ((3, 0, 1, "off", "02c6,254x67,0,0{223x67,0,0,95,30x67,224,0[30x16,224,0,96,30x16,224,17,98,30x33,224,34,97]}", " 96 98 97 ", " 96:120 ", "", 0, " ", " "), "ee0d,254x67,0,0{133x67,0,0,95,120x67,134,0[120x16,134,0,96,120x16,134,17,98,120x33,134,34,97]}"),
+        // MIN_W=0 sentinel, not fully-min -> unchanged from normal height-only flex
+        ((3, 0, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 97 ", " ", "", 0, " ", " "), "2b8c,254x67,0,0{127x67,0,0,95,126x67,128,0[126x3,128,0,96,126x59,128,4,98,126x3,128,64,97]}"),
+        // MIN_W=0 sentinel ignores a per-group @minimize_minw hint (sentinel wins)
+        ((3, 0, 1, "off", "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}", " 96 98 97 ", " ", "", 0, " ", " 96:50 "), "02c6,254x67,0,0{127x67,0,0,95,126x67,128,0[126x16,128,0,96,126x16,128,17,98,126x33,128,34,97]}"),
     ];
 
     #[test]

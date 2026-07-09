@@ -36,12 +36,15 @@ if [ -z "$_BIN" ]; then
 fi
 
 # Read the size options in ONE tmux round-trip (this runs on every engine invocation).
-IFS='|' read -r MIN_H MIN_W ABS_MIN_H <<<"$(tmux display-message -p '#{@minimize-height}|#{@minimize-width}|#{@minimize-absolute-min-height}' 2>/dev/null || true)"
+IFS='|' read -r MIN_H MIN_W ABS_MIN_H NARROW <<<"$(tmux display-message -p '#{@minimize-height}|#{@minimize-width}|#{@minimize-absolute-min-height}|#{@minimize-narrow}' 2>/dev/null || true)"
 case "$MIN_H" in ''|*[!0-9]*) MIN_H=3 ;; esac
 case "$MIN_W" in ''|*[!0-9]*) MIN_W=30 ;; esac
 case "$ABS_MIN_H" in ''|*[!0-9]*) ABS_MIN_H=1 ;; esac
 [ "$ABS_MIN_H" -lt 1 ] && ABS_MIN_H=1
 [ "$ABS_MIN_H" -gt "$MIN_H" ] && ABS_MIN_H=$MIN_H   # the floor can't exceed the comfortable height
+# Width-narrowing is opt-in (default off). Off passes MIN_W=0 to the engine as the "disabled"
+# sentinel, so a fully-min group stays flexible instead of collapsing to a narrow column.
+[ "$NARROW" != "on" ] && MIN_W=0
 BORDER_POS="${BORDER_POS:-off}"   # apply() overrides this from tmux; default is for selftest
 
 # _transform: call the Rust engine with the SAME six positional inputs the bash transform()
@@ -271,6 +274,29 @@ reset_minh() {
   _unlock
 }
 
+# narrow_toggle: flip @minimize-narrow (on|off) globally and re-pin every window so the change
+# takes effect immediately — turning it on narrows every currently fully-minimized group,
+# turning it off widens each of them back to its saved pre-narrow width. We update MIN_W in
+# this process directly (from what we just set) instead of re-querying tmux — cheaper and
+# it's the same value.
+narrow_toggle() {
+  local cur w
+  cur=$(tmux show-option -gqv @minimize-narrow 2>/dev/null || true)
+  case "$cur" in
+    on) tmux set-option -g @minimize-narrow off; MIN_W=0 ;;
+    *)  tmux set-option -g @minimize-narrow on
+        # Restore the configured @minimize-width; MIN_W was clamped to 0 at load if narrow was off.
+        MIN_W=$(tmux show-option -gqv @minimize-width 2>/dev/null || true)
+        case "$MIN_W" in ''|*[!0-9]*) MIN_W=30 ;; esac ;;
+  esac
+  while read -r w; do
+    [ -z "$w" ] && continue
+    _lock "$w"; apply "$w"; _unlock
+  done <<EOF
+$(tmux list-windows -a -F '#{window_id}' 2>/dev/null || true)
+EOF
+}
+
 # reset_minw: clear a fully-minimized group's custom width, snapping it back to @minimize-width.
 # The width is shared across the group (stored on every member), so clear @minimize_minw on
 # every pane in the target's column (panes in a vertical stack share pane_left), then re-pin.
@@ -442,6 +468,7 @@ case "${1:-}" in
   minh-shrink) adjust_minh "$2" "-$3" ;;
   minh-reset)  reset_minh "$2" ;;
   minw-reset)  reset_minw "$2" ;;
+  narrow-toggle) narrow_toggle ;;
   repin)
     _lock "$2"; apply "$2"; _unlock ;;
   selftest)

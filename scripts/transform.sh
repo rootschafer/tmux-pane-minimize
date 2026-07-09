@@ -145,6 +145,17 @@ _minw_of() {
 _fixed_width() {
   local id=$1 sw mw
   [ "${NT[$id]}" = "v" ] || { RET=-1; return; }
+  # MIN_W<=0 is the sentinel for "width-narrowing disabled" (@minimize-narrow=off). Don't fix
+  # the width — but widen a currently narrowed group back to its saved pre-narrow width, so
+  # toggling off restores the natural layout.
+  if [ "$MIN_W" -le 0 ]; then
+    fully_min "$id"
+    if [ "$RET" = 1 ]; then
+      _savedw_of "$id"; sw=$RET
+      case "$sw" in ''|*[!0-9]*) ;; *) RET=$sw; return;; esac
+    fi
+    RET=-1; return
+  fi
   _minw_of "$id"; mw=$RET
   case "$mw" in ''|*[!0-9]*) mw=$MIN_W ;; esac
   fully_min "$id"

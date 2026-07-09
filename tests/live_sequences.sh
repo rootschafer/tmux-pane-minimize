@@ -298,6 +298,7 @@ part_minw() {
   T kill-server >/dev/null 2>&1
   T new-session -d -x 200 -y 50
   T set-option -g @minimize-width 30
+  T set-option -g @minimize-narrow on     # p4b exercises width-narrowing (opt-in since default is off)
   T split-window -h -t 0
   T split-window -v -t 1
   win=$(T display-message -p '#{window_id}')
@@ -341,6 +342,49 @@ part_minw() {
   mw=$(T show-options -t "$rbot" -pqv @minimize_minw 2>/dev/null || true)
   if [ -z "$mw" ]; then ok "p4b minw-reset cleared @minimize_minw across the group"; else bad "p4b rbot still has @minimize_minw=$mw"; fi
   assert_live "p4b after minw-reset"
+}
+
+# --- Part 4c: @minimize-narrow opt-in + runtime toggle ----------------------
+# Width-narrowing is opt-in (default off). This exercises three things:
+#   (a) with narrow=off, minimizing an entire vertical stack does NOT narrow the column;
+#   (b) `narrow-toggle` flips it on and re-pins, collapsing the stack to MIN_W;
+#   (c) `narrow-toggle` again widens the group back to its saved pre-narrow width.
+part_narrow_toggle() {
+  local left rtop rbot win w0 w
+  T kill-server >/dev/null 2>&1
+  T new-session -d -x 200 -y 50
+  T set-option -g @minimize-width 30
+  # NOTE: intentionally do NOT set @minimize-narrow — its absence is the default (off).
+  T split-window -h -t 0
+  T split-window -v -t 1
+  win=$(T display-message -p '#{window_id}')
+  left=$(T list-panes -F '#{pane_left} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  rtop=$(T list-panes -F '#{pane_left} #{pane_top} #{pane_id}' | sort -k1,1n -k2,2n | tail -2 | head -1 | awk '{print $3}')
+  rbot=$(T list-panes -F '#{pane_left} #{pane_top} #{pane_id}' | sort -k1,1n -k2,2n | tail -1 | awk '{print $3}')
+  w0=$(T display-message -p -t "$rtop" '#{pane_width}')                     # pre-minimize width
+
+  # (a) minimize the entire right stack with narrow=off (default). The column must NOT narrow.
+  bash "$ENGINE" toggle "$rtop"; bash "$ENGINE" toggle "$rbot"
+  T select-pane -t "$left"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = "$w0" ]; then ok "p4c narrow=off: fully-min stack keeps its width ($w)"; else bad "p4c narrow=off changed width $w0 -> $w"; fi
+  assert_live "p4c after minimize with narrow=off"
+
+  # (b) toggle narrow ON via the runtime command; the group must collapse to MIN_W(30).
+  bash "$ENGINE" narrow-toggle
+  local on; on=$(T show-option -gqv @minimize-narrow)
+  if [ "$on" = on ]; then ok "p4c narrow-toggle set @minimize-narrow=on"; else bad "p4c narrow-toggle -> @minimize-narrow=$on (expected on)"; fi
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 30 ]; then ok "p4c narrow-toggle on -> collapsed to MIN_W(30)"; else bad "p4c after toggle-on width=$w (expected 30)"; fi
+  assert_live "p4c after narrow-toggle on"
+
+  # (c) toggle narrow OFF again; the group must widen back to its saved pre-narrow width.
+  bash "$ENGINE" narrow-toggle
+  local off; off=$(T show-option -gqv @minimize-narrow)
+  if [ "$off" = off ]; then ok "p4c narrow-toggle set @minimize-narrow=off"; else bad "p4c narrow-toggle -> @minimize-narrow=$off (expected off)"; fi
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = "$w0" ]; then ok "p4c narrow-toggle off -> widened back to $w0"; else bad "p4c after toggle-off width=$w (expected $w0)"; fi
+  assert_live "p4c after narrow-toggle off"
 }
 
 # --- Part 5: minimize-others (minimize all but active) ----------------------------
@@ -625,6 +669,7 @@ main() {
   part3
   part_minh
   part_minw
+  part_narrow_toggle
   part_minimize_others
   part_peek
   part_resize_window

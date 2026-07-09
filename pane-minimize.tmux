@@ -82,6 +82,14 @@ RESET_KEY="$(opt @minimize-minh-reset-key '')"
 MINW_RESET_KEY="$(opt @minimize-minw-reset-key '')"
 [ -n "$MINW_RESET_KEY" ] && tmux bind-key "$MINW_RESET_KEY" run-shell "$SCRIPT minw-reset #{pane_id}"
 
+# Width-narrowing (collapsing a fully-minimized column to @minimize-width) is OPT-IN — set
+# @minimize-narrow 'on' to enable it. It's off by default because most users find it
+# distracting, and skipping the width change also sidesteps the terminal-prompt duplication
+# bug that only fires when a pane's width changes. @minimize-narrow-toggle-key binds a key
+# to flip it at runtime (repins every window instantly). Suggested: set the key to 'N'.
+NARROW_TOGGLE_KEY="$(opt @minimize-narrow-toggle-key '')"
+[ -n "$NARROW_TOGGLE_KEY" ] && tmux bind-key "$NARROW_TOGGLE_KEY" run-shell "$SCRIPT narrow-toggle"
+
 # Optional "minimize others" key (opt-in): minimize every pane except the active one; press
 # again to restore the previous layout. Suggested: set @minimize-others-key 'M'.
 OTHERS_KEY="$(opt @minimize-others-key '')"
