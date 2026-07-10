@@ -34,50 +34,71 @@ drag, or resize keys) — but **not** when the terminal window itself is resized
 
 ## Install
 
+No compiler, no Rust, no manual steps: the plugin's layout math runs in a small
+prebuilt binary that installs itself on first load (see [The engine](#the-engine)).
+Add the plugin, reload tmux, done.
+
 ### TPM (recommended)
 Add to `~/.tmux.conf`:
 ```tmux
 set -g @plugin 'rootschafer/tmux-pane-minimize'
 run '~/.tmux/plugins/tpm/tpm'
 ```
-Then press `prefix + I` to fetch.
+Then press `prefix + I` to fetch. On first load the plugin downloads the engine for
+your platform in the background (a few hundred KB, sha256-verified); minimizing works
+the moment it lands — typically within seconds. Updating the plugin (`prefix + U`)
+updates the engine automatically on the next reload.
 
 ### Manual
-```tmux
-run-shell ~/clone/of/tmux-pane-minimize/pane-minimize.tmux
+```sh
+git clone https://github.com/rootschafer/tmux-pane-minimize ~/.tmux/tmux-pane-minimize
 ```
+```tmux
+run-shell ~/.tmux/tmux-pane-minimize/pane-minimize.tmux
+```
+Same engine story as TPM: fetched and verified automatically on first load.
 
 ### Nix (flake)
-Add the repo as a flake input and run its entry point from your tmux config:
+The flake package builds the engine from source and ships it inside the plugin output —
+nothing is downloaded at runtime. Add the repo as a flake input and run its entry point
+from your tmux config:
 ```nix
 # flake.nix
-inputs.tmux-pane-minimize = {
-  url = "github:rootschafer/tmux-pane-minimize";
-  flake = false;
-};
+inputs.tmux-pane-minimize.url = "github:rootschafer/tmux-pane-minimize";
 ```
 ```nix
 # wherever you build your tmux config (Home Manager / nix-darwin / NixOS)
 programs.tmux.extraConfig = ''
-  run-shell ${inputs.tmux-pane-minimize}/pane-minimize.tmux
+  run-shell ${inputs.tmux-pane-minimize.packages.${pkgs.system}.default}/pane-minimize.tmux
   set -g @minimize-height 3
   # ... other @minimize-* options ...
 '';
 ```
-Pin/update with `nix flake update tmux-pane-minimize`.
+Pin/update with `nix flake update tmux-pane-minimize`. (Non-flake:
+`pkgs.callPackage ./default.nix { }` on a checkout.)
 
-### Building the engine
-The layout math runs in a small compiled Rust engine (the `engine-rs/` crate, binary
-`tmux-min-transform`) — it has zero dependencies, so the build is fast and offline:
-```sh
-cargo build --release          # from the repo root (cargo workspace; no --manifest-path needed)
-```
-The plugin finds the binary via `$TMUX_MIN_TRANSFORM`, then your `PATH`, then the
-`target/release` build above. For a TPM/manual install, build it once (or put
-`tmux-min-transform` on your `PATH`); set `TMUX_MIN_TRANSFORM` to an explicit path if you
-install the binary elsewhere. On Nix, build it with `rustPlatform.buildRustPackage` and
-`set-environment -g TMUX_MIN_TRANSFORM <store-path>/bin/tmux-min-transform` before loading
-the plugin. If the binary can't be found, minimize/peek do nothing (there is no fallback).
+### The engine
+The layout math runs in a tiny zero-dependency Rust binary, `tmux-min-transform`
+(the `engine-rs/` crate). The plugin resolves it in this order:
+
+1. `$TMUX_MIN_TRANSFORM` — explicit path override.
+2. Beside the scripts — where the Nix package places it.
+3. Your `PATH`.
+4. `~/.local/share/tmux-pane-minimize/` (`$XDG_DATA_HOME`) — where the **automatic
+   download** installs it. `scripts/engine.manifest` (committed to this repo by the
+   release workflow) pins the exact release and the sha256 the binary must match, so
+   a download is verified against a checksum that shipped with the code, and a plugin
+   update re-fetches the matching engine by itself.
+5. `target/release/` — a local `cargo build --release` (development).
+
+Prebuilt platforms: **macOS** (Apple silicon + Intel) and **Linux** (x86_64 + aarch64,
+static musl builds that run on any distro). On anything else — BSDs, other
+architectures — the plugin falls back to building the engine with an
+already-installed `cargo` (it has zero dependencies, so that's fast and offline); it
+never installs a toolchain itself. To forbid the download entirely, set
+`set -g @minimize-engine-fetch off` and provide the binary via any of the other paths.
+If no engine can be found, minimize/peek are silent no-ops and the plugin tells you
+what's wrong via a status-line message.
 
 ## Usage
 `prefix` + `Ctrl-t` toggles the active pane between minimized (`@minimize-height`
@@ -261,6 +282,10 @@ set -g @minimize-others-key   ''   # e.g. 'M'  minimize all panes but the active
 set -g @minimize-resurrect 'on'       # persist minimized state across tmux-resurrect
                                       # save/restore (chains onto your resurrect hooks,
                                       # preserving them; 'off' to opt out — see below)
+
+set -g @minimize-engine-fetch 'on'    # 'off' to never download the prebuilt engine;
+                                      # provide it via PATH / TMUX_MIN_TRANSFORM / cargo
+                                      # instead (see "The engine" above)
 ```
 Only `@minimize-key` is bound by default; the grow/shrink/reset and minimize-others keys are
 opt-in (empty until you set them). The marker and resurrect persistence are on by default.
@@ -337,9 +362,16 @@ can't apply conflicting layouts. (Note: the engine names use an underscore,
 tmux ≥ 3.0 (`select-layout`, `#{window_layout}`, hooks, `MouseDragEnd1Border`,
 `MouseDown1Pane` with pane-relative `#{mouse_x}`/`#{mouse_y}`) and a POSIX shell with
 `awk`, `sort`, `tr` — no GNU-only flags; tested on macOS bash 3.2. Click-to-toggle
-also needs `set -g mouse on`.
+also needs `set -g mouse on`. The automatic engine download needs `curl` (or `wget`);
+without either, install the binary via one of the other paths in
+[The engine](#the-engine).
 
 ## Known limitations
+- With `pane-border-status` on, tmux paints a ~3-character segment in the **active**
+  border colour at the T-junction where a stacked group of panes meets an adjacent
+  column. This is tmux's own border painting (the junction cell belongs to both
+  panes and tmux resolves it in favour of the active one) — it's cosmetic, and not
+  fixable from a plugin without patching tmux.
 - A pane that is **both minimized and at the very top/bottom edge** renders one row
   shorter than `@minimize-height`, because the pane-border status line overlays that
   edge row.

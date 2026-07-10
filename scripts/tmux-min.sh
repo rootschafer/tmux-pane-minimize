@@ -22,7 +22,8 @@ set -u
 # The pure layout math now lives in the compiled Rust engine, tmux-min-transform (built
 # from engine-rs/). transform.sh is kept ONLY as the test oracle and is NOT sourced here.
 # Resolve the binary via a BASH_SOURCE-relative path so a socket-patched test copy still
-# works. Resolution order: explicit override (env / Nix), then PATH, then the dev build.
+# works. Resolution order: explicit override (env), beside the scripts (Nix package),
+# PATH, the downloaded prebuilt (ensure-engine.sh -> XDG data dir), then the dev build.
 _DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 _BIN="${TMUX_MIN_TRANSFORM:-}"
 if [ -z "$_BIN" ]; then
@@ -30,6 +31,8 @@ if [ -z "$_BIN" ]; then
     _BIN="$_DIR/tmux-min-transform"                            # installed beside scripts (Nix package)
   elif command -v tmux-min-transform >/dev/null 2>&1; then
     _BIN="tmux-min-transform"                                  # on PATH
+  elif [ -x "${XDG_DATA_HOME:-$HOME/.local/share}/tmux-pane-minimize/tmux-min-transform" ]; then
+    _BIN="${XDG_DATA_HOME:-$HOME/.local/share}/tmux-pane-minimize/tmux-min-transform"  # fetched prebuilt
   elif [ -x "$_DIR/../target/release/tmux-min-transform" ]; then
     _BIN="$_DIR/../target/release/tmux-min-transform"  # cargo dev build (workspace target/ at repo root)
   fi

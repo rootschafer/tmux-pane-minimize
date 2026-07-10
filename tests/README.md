@@ -17,6 +17,7 @@ VERBOSE=1 tests/run.sh # print every passing assertion too
 | `gen_layouts.sh` | **Layout generator.** Emits all trees of 1–4 leaves (h/v 2–4 splits + one level of nesting, incl. the column-beside-stack bug shape) at sizes 24×8 / 80×24 / 222×61. |
 | `transform_props.sh` | **Offline property suite** (≈11k cases). For every generated layout × every MINSET subset × every WPANE × WVAL extreme `{0,1,3,9,1000}` × per-pane `MINH` extremes, plus a `BORDER_POS` top/bottom edge-bonus pass, runs the pure `transform` and checks invariants. `transform` is referentially transparent, so this is fully deterministic. |
 | `live_sequences.sh` | **Live suite** on an isolated `tmux -L … -f /dev/null` server with a socket-patched engine. Parts: 1 scripted regressions, 1b stale-saved-dimension, 2 deterministic fuzz, 3 race-exposer (busy-marker overlap detector), `minh` per-pane height, minimize-others, peek (peekin/peekout + resize-while-peeked), resize-window repin, resurrect round-trip, and an **end-to-end resurrect** test that drives the real `save.sh` (set `RESURRECT_PATH` to point at a checkout; skips if not found). Skips cleanly if tmux is absent. |
+| `ensure_engine_test.sh` | **Install-path suite** for `scripts/ensure-engine.sh`. Hermetic (stub `curl`, scratch `XDG_DATA_HOME`, isolated `TMUX_TMPDIR`): fetch + sha256-verify + atomic install, no-op when current, tampered-download rejection, always-exit-0. |
 | `lib.sh` | shared pass/fail counters. |
 | `run.sh` | top-level runner (CI entry point). |
 

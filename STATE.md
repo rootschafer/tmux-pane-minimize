@@ -24,6 +24,7 @@ per-window lock directory.
 | `@minimize-width` | `30` | `MIN_W` — columns a *fully* minimized vertical stack narrows to. |
 | `@minimize-peek` | `on` | peek-on-focus: focusing a minimized pane expands it to its saved height, collapsing again on focus-out. |
 | `@minimize-resurrect` | `on` | persist per-pane state across restarts by **chaining onto** resurrect's post-save/restore hooks (any hook you already set is preserved — ours runs after it). Turn `off` to opt out entirely. |
+| `@minimize-engine-fetch` | `on` | let `ensure-engine.sh` download the prebuilt engine pinned by `scripts/engine.manifest`. `off` = never download; the engine must then come from `TMUX_MIN_TRANSFORM`, beside the scripts (Nix), `PATH`, or a local cargo build. |
 | `@minimize-others-key` | *(unbound)* | opt-in key for `minimize-others` (minimize all but active; toggle). |
 | `@minimize-minh-step` | `1` | rows per grow/shrink step for the custom minimized height. |
 | `@minimize-minh-grow-key` / `-shrink-key` / `-reset-key` | *(unbound)* | opt-in keys for per-pane custom minimized height. |
@@ -81,6 +82,12 @@ engine is validated against, and is what the offline property suite exhaustively
   resurrect's stable `session:window.pane_index` identity. Written by `save-state`, replayed
   by `restore-state`, both wired to resurrect's `post-save-all`/`post-restore-all` hooks when
   `@minimize-resurrect on`. Peek and minimize-others grouping are intentionally **not** persisted.
+- **Downloaded engine** — `${XDG_DATA_HOME:-~/.local/share}/tmux-pane-minimize/`:
+  `tmux-min-transform` (the prebuilt binary fetched by `ensure-engine.sh`) plus
+  `engine-version` (which release it came from). `scripts/engine.manifest` in the repo —
+  written by the release workflow — pins the release tag and per-target sha256; a
+  mismatch between `engine-version` and the manifest triggers a background re-fetch on
+  plugin load, and the old binary keeps serving until the new one atomically replaces it.
 - **Per-window lock** — `${TMPDIR:-/tmp}/tmux-min-<window>.lock/` (an atomic `mkdir`
   mutex; macOS has no `flock`). Serializes `toggle`/`peekin`/`peekout`/`repin`/… so the
   focus/resize hooks (which fire concurrent `run-shell -b` copies) can't interleave applies.

@@ -8,14 +8,13 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 SCRIPT="$CURRENT_DIR/scripts/tmux-min.sh"
 
 # The layout math runs in a compiled Rust engine (engine-rs/ -> tmux-min-transform). Nix
-# installs ship it prebuilt beside the scripts; TPM/manual installs build it on first load.
-# If it isn't resolvable yet, build it in the BACKGROUND (installs Rust if needed — opt out
-# with @minimize-auto-install-rust off) so tmux start isn't blocked. Minimize works once it
-# finishes; until then toggling a pane is a no-op.
-if [ -z "${TMUX_MIN_TRANSFORM:-}" ] \
-   && [ ! -x "$CURRENT_DIR/scripts/tmux-min-transform" ] \
-   && ! command -v tmux-min-transform >/dev/null 2>&1 \
-   && [ ! -x "$CURRENT_DIR/target/release/tmux-min-transform" ]; then
+# installs ship it prebuilt beside the scripts; for TPM/manual installs ensure-engine.sh
+# downloads the release prebuilt pinned (with its sha256) by scripts/engine.manifest —
+# in the BACKGROUND, so tmux start isn't blocked; it's a fast no-op when the engine is
+# already current, and it re-fetches after an update bumps the manifest. Until the first
+# fetch finishes, toggling a pane is a no-op. Opt out of downloads with
+# `set -g @minimize-engine-fetch off` (it then falls back to an already-installed cargo).
+if [ -z "${TMUX_MIN_TRANSFORM:-}" ] && [ ! -x "$CURRENT_DIR/scripts/tmux-min-transform" ]; then
   tmux run-shell -b "bash '$CURRENT_DIR/scripts/ensure-engine.sh'"
 fi
 

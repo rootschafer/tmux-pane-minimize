@@ -2,8 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -25,6 +26,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tmux
 
+      # The live suite and the differential test drive the compiled engine.
+      - uses: dtolnay/rust-toolchain@stable
+
       - name: Check out tmux-resurrect (for the end-to-end resurrect test)
         uses: actions/checkout@v4
         with:
@@ -36,6 +40,7 @@ jobs:
           /bin/bash --version | head -1
           tmux -V
           shellcheck --version | head -2
+          cargo --version
 
       - name: Syntax check (bash -n)
         run: |
@@ -45,6 +50,19 @@ jobs:
 
       - name: ShellCheck (warning severity)
         run: shellcheck -s bash -S warning scripts/*.sh pane-minimize.tmux tests/*.sh
+
+      - name: Engine unit tests (cargo)
+        run: cargo test
+
+      - name: Build engine
+        run: cargo build --release
+
+      # Full sweep on ubuntu; QUICK (skip the WVAL inner sweep) on macOS, whose runners
+      # are slower — the full differential still runs on every push via the ubuntu leg.
+      - name: Differential test (Rust engine vs bash oracle, byte-for-byte)
+        env:
+          QUICK: ${{ runner.os == 'macOS' && '1' || '0' }}
+        run: /bin/bash tests/diff_test.sh
 
       - name: Offline property suite + live suite
         env:

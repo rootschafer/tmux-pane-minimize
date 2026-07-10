@@ -9,6 +9,12 @@ use tmux_min_transform::{Params, transform};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    // --version/-V: printed for humans and used by ensure-engine.sh as a post-download
+    // smoke test (proves the fetched binary actually executes on this platform).
+    if args.len() == 2 && (args[1] == "--version" || args[1] == "-V") {
+        println!("tmux-min-transform {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.len() < 11 {
         eprintln!(
             "Usage: tmux-min-transform MIN_H MIN_W ABS_MIN_H BORDER_POS LAYOUT MINSET SAVEDW WPANE WVAL MINH [MINW]"

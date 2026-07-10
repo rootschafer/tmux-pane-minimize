@@ -13,9 +13,13 @@ engine-rs/               the Rust port of the pure layer (THE engine): src/lib.r
 scripts/transform.sh     bash equivalent of the engine, kept ONLY as the differential test oracle
 scripts/tmux-min.sh      the tmux-IO layer — shells out to tmux-min-transform; subcommands + apply
 scripts/marker.sh        the border-marker builder (build_marker -> MARKER_FMT)
+scripts/ensure-engine.sh installs the engine for non-Nix users: downloads the release prebuilt
+                         (pinned + sha256-verified by scripts/engine.manifest), cargo fallback
+scripts/engine.manifest  written by the release workflow: release tag + per-target sha256 pins
 STATE.md                 the single state model — every @minimize-* / @minimize_* option
 tests/                   the test harness (see tests/README.md)
-.github/workflows/ci.yml CI: macOS + ubuntu
+.github/workflows/       ci.yml (macOS + ubuntu test matrix), release.yml (tag -> cross-built
+                         binaries on the GitHub release + manifest pin committed to main)
 ```
 
 The engine is split along its one real seam: the pure layout math vs the tmux IO. The pure
@@ -120,5 +124,21 @@ to zero) must be guarded — the `reconcile()` pass exists for exactly that.
 ## CI
 
 `.github/workflows/ci.yml` runs on macOS + ubuntu: `bash -n`, shellcheck (warning sev),
-the offline property suite, and the live suite (with a tmux-resurrect checkout). Keep it
-green; add coverage with each change.
+`cargo test`, the Rust-vs-bash differential (`tests/diff_test.sh`), the offline property
+suite, the ensure-engine install-path suite, and the live suite (with a tmux-resurrect
+checkout). Keep it green; add coverage with each change.
+
+## Releasing
+
+Push a tag `vX.Y.Z` (usually on main). `.github/workflows/release.yml` then:
+
+1. cross-builds `tmux-min-transform` for every supported target
+   (linux x86_64/aarch64 as static musl, macOS arm64/x86_64), smoke-testing each
+   binary on a native runner;
+2. publishes them (plus `SHA256SUMS`) as the GitHub release for that tag;
+3. commits `scripts/engine.manifest` — the release tag + per-target sha256 — to main.
+
+That manifest commit is what rolls the engine out: TPM/manual users pick it up on their
+next plugin update, and `ensure-engine.sh` re-fetches the pinned binary in the
+background (verifying it against the committed sha256). Keep `engine-rs/Cargo.toml`'s
+`version` in step with the tag so `tmux-min-transform --version` stays truthful.

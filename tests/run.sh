@@ -25,6 +25,10 @@ echo "### offline property suite"
 "$BASH32" "$RUN_DIR/transform_props.sh" || rc=1
 
 echo
+echo "### ensure-engine (prebuilt fetch/verify/install) suite"
+"$BASH32" "$RUN_DIR/ensure_engine_test.sh" || rc=1
+
+echo
 echo "### live sequence + fuzz + race suite"
 if command -v tmux >/dev/null 2>&1; then
   "$BASH32" "$RUN_DIR/live_sequences.sh" || rc=1
