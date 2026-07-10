@@ -421,8 +421,11 @@ save_state() {
   local f="${1:-}"
   [ -z "$f" ] && f=$(_state_file)
   mkdir -p "$(dirname "$f")" 2>/dev/null || true
-  # one TAB-separated line per minimized pane: sess win pane saved saved_w minh minw
-  tmux list-panes -a -F '#{?@minimize_active,#{session_name}	#{window_index}	#{pane_index}	#{@minimize_saved}	#{@minimize_saved_w}	#{@minimize_minh}	#{@minimize_minw},}' \
+  # One '|'-separated line per minimized pane: win pane saved saved_w minh minw sess.
+  # NOT tab-separated: tmux <= 3.4 sanitizes control chars (incl. TAB) in format output
+  # to '_', which silently corrupted the sidecar. The session name goes LAST so a name
+  # containing '|' still parses (read assigns the remainder to the final field).
+  tmux list-panes -a -F '#{?@minimize_active,#{window_index}|#{pane_index}|#{@minimize_saved}|#{@minimize_saved_w}|#{@minimize_minh}|#{@minimize_minw}|#{session_name},}' \
     | grep -v '^$' > "$f" 2>/dev/null || true
 }
 restore_state() {
@@ -436,7 +439,7 @@ restore_state() {
   # chained tmux call (same coalescing as minimize_others()).
   panemap=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{window_id}' 2>/dev/null || true)
   cmd=()
-  while IFS='	' read -r sess win pane saved savedw minh minw; do
+  while IFS='|' read -r win pane saved savedw minh minw sess; do
     [ -z "$sess" ] && continue
     tgt="${sess}:${win}.${pane}"
     wid=""

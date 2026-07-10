@@ -30,14 +30,18 @@ fi
 # the patched engine at it via TMUX_MIN_TRANSFORM. Exporting it here (before the test server
 # starts) means both the direct `bash "$ENGINE" …` calls and the run-shell hook children
 # (peekin/peekout/dragend/repin) inherit it.
-if ! command -v cargo >/dev/null 2>&1; then
+# A pre-set TMUX_MIN_TRANSFORM (CI, or a container without cargo) is honoured as-is.
+if [ -n "${TMUX_MIN_TRANSFORM:-}" ] && [ -x "${TMUX_MIN_TRANSFORM:-}" ]; then
+  :
+elif ! command -v cargo >/dev/null 2>&1; then
   echo "cargo not found — skipping live suite (needs the Rust engine)"
   exit 0
+else
+  RUST_BIN="$LS_DIR/../target/release/tmux-min-transform"
+  ( cd "$LS_DIR/.." && cargo build --release >/dev/null 2>&1 ) || {
+    echo "cargo build failed — skipping live suite"; exit 0; }
+  export TMUX_MIN_TRANSFORM="$RUST_BIN"
 fi
-RUST_BIN="$LS_DIR/../target/release/tmux-min-transform"
-( cd "$LS_DIR/.." && cargo build --release >/dev/null 2>&1 ) || {
-  echo "cargo build failed — skipping live suite"; exit 0; }
-export TMUX_MIN_TRANSFORM="$RUST_BIN"
 
 SOCK="tmin_test_$$"
 # A socket-patched MIRROR of the repo (with a scripts/ subdir) so every relative `source`
@@ -48,6 +52,20 @@ ENGINE="$WORKDIR/scripts/tmux-min.sh"
 PLUGIN="$WORKDIR/pane-minimize.tmux"
 
 T() { tmux -L "$SOCK" "$@"; }
+
+# Restart the sandbox server. kill-server immediately followed by new-session RACES on
+# some tmux versions (seen on 3.4/Linux): the new client connects to the dying server's
+# still-present socket, reports "server exited unexpectedly", and no server starts —
+# which is exactly how the old CI runs died mid-suite. Retry until the new server is up.
+fresh_server() {  # new-session args (e.g. -x 222 -y 61 [\; set -g ...])
+  T kill-server >/dev/null 2>&1
+  local i=0
+  while ! T new-session -d "$@" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then T new-session -d "$@"; return; fi   # surface the real error
+    sleep 0.1
+  done
+}
 
 cleanup() { tmux -L "$SOCK" kill-server >/dev/null 2>&1; rm -rf "$WORKDIR"; }
 trap cleanup EXIT INT TERM
@@ -78,8 +96,7 @@ assert_live() {
 # Build the canonical bug shape: a left pane beside a right 2-stack -> h(L, v(L,L)).
 # Returns pane ids in globals P_LEFT P_RTOP P_RBOT.
 build_bugshape() {
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 222 -y 61
+  fresh_server -x 222 -y 61
   T split-window -h -t 0
   T split-window -v -t 1
   P_LEFT=$(T list-panes -F '#{pane_left} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
@@ -110,8 +127,7 @@ part1() {
   assert_live "p1 resize left -x40"
 
   # Two stacks side by side, all minimized (the exact offline-found failure shape).
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 222 -y 61
+  fresh_server -x 222 -y 61
   T split-window -h -t 0
   T split-window -v -t 0
   T split-window -v -t 2
@@ -125,8 +141,7 @@ part1() {
 # SHRINK the window, then un-minimize -> the engine pins it to a saved size that no
 # longer fits. reconcile must keep the layout valid instead of squishing a sibling.
 part1_stale() {
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0
   local top
   top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
@@ -241,8 +256,7 @@ pane_h() { T display-message -p -t "$1" '#{pane_height}'; }
 # vertical stack and minimize only the TOP one; mid+bot stay flexible.
 part_minh() {
   local top bot win h mh
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0
   T split-window -v -t 0
   win=$(T display-message -p '#{window_id}')
@@ -295,8 +309,7 @@ part_minh() {
 # side border sets a custom @minimize_minw that persists (repin, and un/re-minimize).
 part_minw() {
   local left rtop rbot win w mw
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 200 -y 50
+  fresh_server -x 200 -y 50
   T set-option -g @minimize-width 30
   T set-option -g @minimize-narrow on     # p4b exercises width-narrowing (opt-in since default is off)
   T split-window -h -t 0
@@ -351,8 +364,7 @@ part_minw() {
 #   (c) `narrow-toggle` again widens the group back to its saved pre-narrow width.
 part_narrow_toggle() {
   local left rtop rbot win w0 w
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 200 -y 50
+  fresh_server -x 200 -y 50
   T set-option -g @minimize-width 30
   # NOTE: intentionally do NOT set @minimize-narrow — its absence is the default (off).
   T split-window -h -t 0
@@ -391,8 +403,7 @@ part_narrow_toggle() {
 part_minimize_others() {
   local win act orig now nmin top bot dflag
 
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0; T split-window -v -t 0   # 4 panes
   win=$(T display-message -p '#{window_id}')
   act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
@@ -414,8 +425,7 @@ part_minimize_others() {
   assert_live "p5 minimize-others exited"
 
   # A pane the user minimized BEFORE entering minimize-others must survive the round trip.
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0                          # 3 panes
   top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
   bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
@@ -433,8 +443,7 @@ part_minimize_others() {
   # Zoom is preserved across a minimize-others round trip: the verbatim restore goes through
   # _rezoom (shared with apply()), so zooming the active pane inside the minimize-others view
   # and then exiting must keep the window zoomed.
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0                          # 3 panes
   act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
   bash "$ENGINE" minimize-others "$act"        # enter minimize-others
@@ -450,8 +459,7 @@ part_minimize_others() {
 part_resurrect() {
   local top bot state a minh p
   state="/tmp/tmin-state-$SOCK"
-  T kill-server >/dev/null 2>&1
-  T new-session -d -s rs -x 80 -y 40
+  fresh_server -s rs -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0
   top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
   bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
@@ -486,8 +494,7 @@ part_resurrect() {
 # --- Part 8: peek-on-focus (peekin/peekout) + resize-while-peeked save ------
 part_peek() {
   local top bot h saved
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0
   top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
   bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
@@ -521,8 +528,7 @@ part_peek() {
 # hook is wired to repin, and (b) repin re-pins a pane that a window resize rescaled.
 part_resize_window() {
   local top h hook
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   T split-window -v -t 0; T split-window -v -t 0
   bash "$PLUGIN"
   hook=$(T show-hooks -g 2>/dev/null | grep after-resize-window || true)
@@ -541,8 +547,7 @@ part_resize_window() {
 # --- Part M: marker is a good citizen (augments pane-border-format, never clobbers) -----
 part_marker() {
   local fmt
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 24
+  fresh_server -x 80 -y 24
   # Fresh marker state (the host's /etc/tmux.conf may have loaded the real plugin already
   # AND set @minimize-marker-* options — the isolated server still reads /etc/tmux.conf, so
   # clear everything we depend on), then simulate a user with their OWN custom border.
@@ -568,8 +573,7 @@ part_exotic() {
   local act top p
   # ZOOM: minimizing a background pane must NOT kick you out of zoom; minimizing the
   # zoomed pane itself SHOULD unzoom.
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40; T split-window -v -t 0; T split-window -v -t 0
+  fresh_server -x 80 -y 40; T split-window -v -t 0; T split-window -v -t 0
   act=$(T list-panes -F '#{?pane_active,#{pane_id},}' | tr -d '\n ')
   top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
   T resize-pane -Z -t "$act"
@@ -582,21 +586,18 @@ part_exotic() {
   assert_live "pX after zoom cases"
 
   # SINGLE-PANE window: toggling the only pane must produce a valid (no-op-ish) layout.
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40
+  fresh_server -x 80 -y 40
   bash "$ENGINE" toggle "$(T list-panes -F '#{pane_id}')"
   assert_live "pX single-pane toggle valid"
 
   # base-index / pane-base-index non-zero (resurrect keying + general).
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 80 -y 40 \; set -g base-index 1 \; set -g pane-base-index 1
+  fresh_server -x 80 -y 40 \; set -g base-index 1 \; set -g pane-base-index 1
   T split-window -v; T split-window -v
   bash "$ENGINE" toggle "$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')"
   assert_live "pX base-index toggle valid"
 
   # DEEP NEST / many panes.
-  T kill-server >/dev/null 2>&1
-  T new-session -d -x 200 -y 60
+  fresh_server -x 200 -y 60
   T split-window -h; T split-window -v; T split-window -h; T split-window -v; T split-window -h
   for p in $(T list-panes -F '#{pane_id}' | head -4); do bash "$ENGINE" toggle "$p"; done
   assert_live "pX deep-nest minimize valid"
@@ -630,8 +631,7 @@ part_resurrect_e2e() {
   for f in "$res"/scripts/*.sh; do sed "s|tmux |tmux -L $SOCK |g" "$f" > "$rscripts/$(basename "$f")"; done
   chmod +x "$rscripts"/*.sh
 
-  T kill-server >/dev/null 2>&1
-  T new-session -d -s work -x 80 -y 40
+  fresh_server -s work -x 80 -y 40
   T set-option -g @resurrect-dir "$rdir"
   T set-option -g @resurrect-hook-post-save-all "bash '$ENGINE' save-state '$state'"
   T split-window -v -t 0
@@ -646,8 +646,7 @@ part_resurrect_e2e() {
   if [ -s "$state" ]; then ok "p7 post-save hook wrote our sidecar"; else bad "p7 post-save hook did not write sidecar"; fi
 
   # Restart: reconstruct what resurrect restore produces (panes + saved layout).
-  T kill-server >/dev/null 2>&1
-  T new-session -d -s work -x 80 -y 40
+  fresh_server -s work -x 80 -y 40
   T split-window -v -t 0
   T select-layout -t work "$saved"
   bash "$ENGINE" restore-state "$state"
