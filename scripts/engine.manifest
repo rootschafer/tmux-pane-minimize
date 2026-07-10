@@ -1,0 +1,9 @@
+# tmux-pane-minimize engine pin — written by .github/workflows/release.yml.
+# ensure-engine.sh downloads tmux-min-transform-<target> from this release and
+# refuses to install it unless its sha256 matches the line below for the target.
+repo rootschafer/tmux-pane-minimize
+version v0.1.0
+sha256 aarch64-apple-darwin 078d91cef0ba24abb9891a1995866e0a3225320e3be380384d05cf83a117b13f
+sha256 aarch64-unknown-linux-musl 92bcd4e4a0d52f0fe0d381cf34cd79e010c60d571d789a36e462efb93a206988
+sha256 x86_64-apple-darwin f706b2a98d8142b17b9ecadb7ba77ac238fcd82473f19da3b37d48017956f55a
+sha256 x86_64-unknown-linux-musl d6a93f317752b62e2c63474d3d4b3f9f98d846c38ad86cc5abcfe4fd30c2b336
