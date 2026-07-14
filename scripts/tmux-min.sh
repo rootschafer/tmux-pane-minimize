@@ -160,9 +160,19 @@ toggle_pane() {
     # marked un-minimized while still collapsed (or vice versa).
     apply "$win" "$num" "$saved" || tmux set-option -t "$pane" -p @minimize_active 1
   else
-    tmux set-option -t "$pane" -p @minimize_saved "$h" \; \
-         set-option -t "$pane" -p @minimize_saved_w "$w" \; \
-         set-option -t "$pane" -p @minimize_active 1
+    # @minimize_saved_w is the NARROW feature's memory (the width a narrowed group widens
+    # back to). It must exist ONLY while narrowing is on: with narrow off the engine would
+    # otherwise pin a fully-minimized stack to it on every apply, snapping back any width
+    # the user drags. When off, also drop a stale value left by an earlier narrow-on session.
+    if [ "$NARROW" = on ]; then
+      tmux set-option -t "$pane" -p @minimize_saved "$h" \; \
+           set-option -t "$pane" -p @minimize_saved_w "$w" \; \
+           set-option -t "$pane" -p @minimize_active 1
+    else
+      tmux set-option -t "$pane" -p @minimize_saved "$h" \; \
+           set-option -t "$pane" -pu @minimize_saved_w \; \
+           set-option -t "$pane" -p @minimize_active 1
+    fi
     apply "$win" || tmux set-option -t "$pane" -p @minimize_active 0 \; \
          set-option -t "$pane" -pu @minimize_saved \; set-option -t "$pane" -pu @minimize_saved_w
   fi
@@ -211,9 +221,9 @@ peekout() {
 #    changes width; a vertical drag changes height — we detect which from what actually moved.
 # Tolerance of >1 so the border-status edge nibble and untouched panes don't trigger a change.
 dragend() {
-  local win="$1" id a h p act mh cur d need=0 table cols width cmw cids
+  local win="$1" id a h p act mh cur d need=0 table cols width cmw swany cids
   _lock "$win"
-  table=$(tmux list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{pane_height}|#{?@minimize_peek,1,0}|#{pane_active}|#{@minimize_minh}|#{pane_width}|#{pane_left}|#{@minimize_minw}')
+  table=$(tmux list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{pane_height}|#{?@minimize_peek,1,0}|#{pane_active}|#{@minimize_minh}|#{pane_width}|#{pane_left}|#{@minimize_minw}|#{@minimize_saved_w}')
   # per-pane: peek-save + custom minimized HEIGHT (width fields are handled by the awk pass below)
   while IFS='|' read -r id a h p act mh _ _ _; do
     [ -z "$id" ] && continue
@@ -230,16 +240,25 @@ EOF
   # per fully-minimized column: group panes by pane_left (stacked panes share it). A column
   # of >=2 panes that are ALL minimized and NONE active is a narrowed group; if its width no
   # longer matches its recorded minw (or MIN_W), the user dragged it -> persist as @minimize_minw.
+  # With narrow OFF the engine ignores minw, so recording it would be noise; instead a drag
+  # clears any stale @minimize_saved_w on the column (left by a narrow-on session or a config
+  # flip), because the engine pins a fully-min group to saved_w and would snap the drag back.
   cols=$(printf '%s\n' "$table" | awk -F'|' '
     $1=="" { next }
-    { L=$8; cnt[L]++; if ($2!=1) notmin[L]=1; if ($5==1) act[L]=1; wd[L]=$7; mw[L]=$9; ids[L]=ids[L]" "$1 }
-    END { for (L in cnt) if (cnt[L]>=2 && notmin[L]!=1 && act[L]!=1) print wd[L]"|"mw[L]"|"ids[L] }')
-  while IFS='|' read -r width cmw cids; do
+    { L=$8; cnt[L]++; if ($2!=1) notmin[L]=1; if ($5==1) act[L]=1; wd[L]=$7; mw[L]=$9;
+      if ($10!="") sw[L]=1; ids[L]=ids[L]" "$1 }
+    END { for (L in cnt) if (cnt[L]>=2 && notmin[L]!=1 && act[L]!=1) print wd[L]"|"mw[L]"|"sw[L]"|"ids[L] }')
+  while IFS='|' read -r width cmw swany cids; do
     [ -z "$width" ] && continue
-    case "$cmw" in ''|*[!0-9]*) cur=$MIN_W ;; *) cur=$cmw ;; esac
-    d=$(( width - cur )); [ "$d" -lt 0 ] && d=$(( -d ))
-    if [ "$d" -gt 1 ]; then
-      for id in $cids; do tmux set-option -t "$id" -p @minimize_minw "$width"; done
+    if [ "$NARROW" = on ]; then
+      case "$cmw" in ''|*[!0-9]*) cur=$MIN_W ;; *) cur=$cmw ;; esac
+      d=$(( width - cur )); [ "$d" -lt 0 ] && d=$(( -d ))
+      if [ "$d" -gt 1 ]; then
+        for id in $cids; do tmux set-option -t "$id" -p @minimize_minw "$width"; done
+        need=1
+      fi
+    elif [ "$swany" = 1 ]; then
+      for id in $cids; do tmux set-option -t "$id" -pu @minimize_saved_w; done
       need=1
     fi
   done <<EOF
@@ -283,14 +302,28 @@ reset_minh() {
 # this process directly (from what we just set) instead of re-querying tmux — cheaper and
 # it's the same value.
 narrow_toggle() {
-  local cur w
+  local cur w turned_off=0 id pw
+  local -a cmd
   cur=$(tmux show-option -gqv @minimize-narrow 2>/dev/null || true)
   case "$cur" in
-    on) tmux set-option -g @minimize-narrow off; MIN_W=0 ;;
+    on) tmux set-option -g @minimize-narrow off; MIN_W=0; turned_off=1 ;;
     *)  tmux set-option -g @minimize-narrow on
         # Restore the configured @minimize-width; MIN_W was clamped to 0 at load if narrow was off.
         MIN_W=$(tmux show-option -gqv @minimize-width 2>/dev/null || true)
-        case "$MIN_W" in ''|*[!0-9]*) MIN_W=30 ;; esac ;;
+        case "$MIN_W" in ''|*[!0-9]*) MIN_W=30 ;; esac
+        # Turning ON: capture every minimized pane's CURRENT width as its pre-narrow
+        # width, so a group narrowed by the repin below can widen back to it later.
+        # (saved_w exists only while narrow is on; nothing recorded it while off.)
+        cmd=()
+        while read -r id pw; do
+          [ -z "$id" ] && continue
+          [ -z "$pw" ] && continue
+          [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+          cmd+=( set-option -t "$id" -p @minimize_saved_w "$pw" )
+        done <<EOF
+$(tmux list-panes -a -F '#{pane_id} #{?@minimize_active,#{pane_width},}' 2>/dev/null || true)
+EOF
+        [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}" ;;
   esac
   while read -r w; do
     [ -z "$w" ] && continue
@@ -298,6 +331,20 @@ narrow_toggle() {
   done <<EOF
 $(tmux list-windows -a -F '#{window_id}' 2>/dev/null || true)
 EOF
+  # Turning OFF: the repins above just widened every narrowed group back to its saved_w —
+  # that memory is now consumed. Clear it everywhere, or the engine would keep pinning
+  # fully-minimized stacks to it (snapping back user drags) while narrow is off.
+  if [ "$turned_off" = 1 ]; then
+    cmd=()
+    while read -r id; do
+      [ -z "$id" ] && continue
+      [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+      cmd+=( set-option -t "$id" -pu @minimize_saved_w )
+    done <<EOF
+$(tmux list-panes -a -F '#{pane_id}' 2>/dev/null || true)
+EOF
+    [ "${#cmd[@]}" -gt 0 ] && tmux "${cmd[@]}"
+  fi
 }
 
 # reset_minw: clear a fully-minimized group's custom width, snapping it back to @minimize-width.
@@ -374,8 +421,13 @@ EOF
       [ "$pa" = 1 ] && continue          # keep the active pane
       [ "$ma" = 1 ] && continue          # leave user-minimized panes as-is
       [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
+      # saved_w only while narrow is on (see toggle_pane) — when off, also heal a stale one.
+      if [ "$NARROW" = on ]; then
+        cmd+=( set-option -t "$id" -p @minimize_saved_w "$pw" ';' )
+      else
+        cmd+=( set-option -t "$id" -pu @minimize_saved_w ';' )
+      fi
       cmd+=( set-option -t "$id" -p @minimize_saved "$ph" ';'
-             set-option -t "$id" -p @minimize_saved_w "$pw" ';'
              set-option -t "$id" -p @minimize_active 1 ';'
              set-option -t "$id" -p @minimize_others 1 )
     done <<EOF
@@ -450,7 +502,11 @@ EOF
     [ "${#cmd[@]}" -gt 0 ] && cmd+=( ';' )
     cmd+=( set-option -t "$tgt" -p @minimize_active 1 )
     case "$saved"  in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved   "$saved"  ) ;; esac
-    case "$savedw" in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved_w "$savedw" ) ;; esac
+    # saved_w exists only while narrow is on — replaying it with narrow off would make
+    # the engine pin fully-minimized stacks to it (the width snap-back bug).
+    if [ "$NARROW" = on ]; then
+      case "$savedw" in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved_w "$savedw" ) ;; esac
+    fi
     case "$minh"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minh    "$minh"   ) ;; esac
     case "$minw"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minw    "$minw"   ) ;; esac
     case " $wins " in *" $wid "*) ;; *) wins="$wins $wid" ;; esac

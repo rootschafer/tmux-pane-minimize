@@ -57,12 +57,16 @@ T() { tmux -L "$SOCK" "$@"; }
 # some tmux versions (seen on 3.4/Linux): the new client connects to the dying server's
 # still-present socket, reports "server exited unexpectedly", and no server starts —
 # which is exactly how the old CI runs died mid-suite. Retry until the new server is up.
+# `-f /dev/null` matters HERE, not just on the first server: new-session is what boots
+# each fresh server, and without it the server reads the developer's real tmux config
+# (~/.config/tmux/tmux.conf) — e.g. a `pane-border-status top` there flips the engine's
+# edge-bonus and skews every height assertion. CI was blind to this (no user config).
 fresh_server() {  # new-session args (e.g. -x 222 -y 61 [\; set -g ...])
   T kill-server >/dev/null 2>&1
   local i=0
-  while ! T new-session -d "$@" >/dev/null 2>&1; do
+  while ! tmux -L "$SOCK" -f /dev/null new-session -d "$@" >/dev/null 2>&1; do
     i=$((i + 1))
-    if [ "$i" -ge 50 ]; then T new-session -d "$@"; return; fi   # surface the real error
+    if [ "$i" -ge 50 ]; then tmux -L "$SOCK" -f /dev/null new-session -d "$@"; return; fi   # surface the real error
     sleep 0.1
   done
 }
@@ -399,6 +403,70 @@ part_narrow_toggle() {
   assert_live "p4c after narrow-toggle off"
 }
 
+# --- Part 4d: narrow=off must never pin a fully-min stack's width ------------
+# Regression tests for the width snap-back bug: with @minimize-narrow off (the
+# default), a fully-minimized vertical stack's width was pinned to the panes'
+# @minimize_saved_w on every apply — so a user's border drag snapped back on
+# release (dragend), and a peekin/peekout round trip "randomly" resized the
+# column. @minimize_saved_w is the NARROW feature's memory (the width to widen
+# back to): it must exist only while narrowing is on.
+part_narrow_off_widths() {
+  local left rtop rbot win w sw
+  fresh_server -x 200 -y 50
+  # NOTE: @minimize-narrow deliberately unset — off is the default under test.
+  T split-window -h -t 0
+  T split-window -v -t 1
+  win=$(T display-message -p '#{window_id}')
+  left=$(T list-panes -F '#{pane_left} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  rtop=$(T list-panes -F '#{pane_left} #{pane_top} #{pane_id}' | sort -k1,1n -k2,2n | tail -2 | head -1 | awk '{print $3}')
+  rbot=$(T list-panes -F '#{pane_left} #{pane_top} #{pane_id}' | sort -k1,1n -k2,2n | tail -1 | awk '{print $3}')
+  bash "$ENGINE" toggle "$rtop"; bash "$ENGINE" toggle "$rbot"
+  T select-pane -t "$left"          # the fully-min stack has NO active pane
+
+  # (a) minimizing with narrow=off must not record a saved width at all
+  sw=$(T show-options -t "$rtop" -pqv @minimize_saved_w 2>/dev/null || true)
+  if [ -z "$sw" ]; then ok "p4d narrow=off: no @minimize_saved_w recorded"; else bad "p4d narrow=off recorded @minimize_saved_w=$sw"; fi
+
+  # (b) drag the shared border (widen left to 130 -> stack 69) and release: must stick
+  T resize-pane -t "$left" -x 130
+  bash "$ENGINE" dragend "$win"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 69 ]; then ok "p4d drag sticks through dragend (stack=69)"; else bad "p4d dragend snapped the stack back (w=$w, expected 69)"; fi
+  assert_live "p4d after dragend"
+
+  # (c) a peek round trip must not change widths
+  T select-pane -t "$rtop"; bash "$ENGINE" peekin "$rtop" "$win"
+  T select-pane -t "$left"; bash "$ENGINE" peekout "$rtop" "$win"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 69 ]; then ok "p4d peek round trip keeps width (69)"; else bad "p4d peekout resized the stack (w=$w, expected 69)"; fi
+  assert_live "p4d after peek round trip"
+
+  # (d) stale @minimize_saved_w (pre-fix session, or narrow flipped off via config
+  # reload): the next drag must stick anyway and clear the stale option (self-heal).
+  T set-option -t "$rtop" -p @minimize_saved_w 99
+  T set-option -t "$rbot" -p @minimize_saved_w 99
+  T resize-pane -t "$left" -x 120
+  bash "$ENGINE" dragend "$win"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 79 ]; then ok "p4d drag sticks despite stale saved_w (stack=79)"; else bad "p4d stale saved_w snapped the stack (w=$w, expected 79)"; fi
+  sw=$(T show-options -t "$rtop" -pqv @minimize_saved_w 2>/dev/null || true)
+  if [ -z "$sw" ]; then ok "p4d stale saved_w cleared by drag"; else bad "p4d stale saved_w survived the drag ($sw)"; fi
+
+  # (e) narrow on->off round trip: toggle-off widens back to the width the stack had
+  # when narrowing came ON (79), consumes saved_w, and later drags stick again.
+  bash "$ENGINE" narrow-toggle      # on  -> stack collapses to MIN_W
+  bash "$ENGINE" narrow-toggle      # off -> widens back
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 79 ]; then ok "p4d narrow round trip restores width (79)"; else bad "p4d narrow round trip width=$w (expected 79)"; fi
+  sw=$(T show-options -t "$rtop" -pqv @minimize_saved_w 2>/dev/null || true)
+  if [ -z "$sw" ]; then ok "p4d toggle-off consumed saved_w"; else bad "p4d saved_w lingers after toggle-off ($sw)"; fi
+  T resize-pane -t "$left" -x 150
+  bash "$ENGINE" dragend "$win"
+  w=$(T display-message -p -t "$rtop" '#{pane_width}')
+  if [ "$w" = 49 ]; then ok "p4d drag after narrow round trip sticks (49)"; else bad "p4d post-round-trip drag snapped back (w=$w, expected 49)"; fi
+  assert_live "p4d final"
+}
+
 # --- Part 5: minimize-others (minimize all but active) ----------------------------
 part_minimize_others() {
   local win act orig now nmin top bot dflag
@@ -669,6 +737,7 @@ main() {
   part_minh
   part_minw
   part_narrow_toggle
+  part_narrow_off_widths
   part_minimize_others
   part_peek
   part_resize_window
