@@ -591,6 +591,39 @@ part_peek() {
   assert_live "p8 after peekout"
 }
 
+# --- Part 8b: a peeked pane must not starve its minimized siblings below MIN_H ------
+# Regression for the "inflated saved height" bug. @minimize_saved (a pane's peek/restore
+# target) is captured as the pane's height at minimize time — which can be far larger than
+# the pane could ever occupy in its current stack. The worst offender: minimizing a pane
+# while it is ALONE in its column (only an h-split neighbour, so it can't shrink) records
+# its FULL column height; a later vertical split makes it one of several stacked panes, but
+# the stale full-height saved persists. Peeking it then pins it to nearly the whole column
+# and reconcile shaves every other minimized pane to the ABS_MIN_H(1) crowding floor — even
+# though the column has dozens of spare rows. A non-active minimized pane must keep MIN_H
+# whenever the column has room for it.
+part_peek_floor() {
+  local win B top mid bot h
+  fresh_server -x 200 -y 50
+  T set-option -g @minimize-height 4
+  win=$(T display-message -p '#{window_id}')
+  T split-window -h -t 0                        # A | B  (B alone in the right column)
+  B=$(T list-panes -F '#{pane_left}_#{pane_id}' | awk -F_ '$1>0{print $2}')
+  bash "$ENGINE" toggle "$B"                     # minimize B while alone -> saved = full height
+  T split-window -v -t "$B"                      # split B: a second pane below it
+  T split-window -v -t "$B"                      # and a third -> right column is a 3-stack
+  top=$(T list-panes -F '#{pane_left}_#{pane_top}_#{pane_id}' | awk -F_ '$1>0' | sort -t_ -k2,2n | head -1  | awk -F_ '{print $3}')
+  mid=$(T list-panes -F '#{pane_left}_#{pane_top}_#{pane_id}' | awk -F_ '$1>0' | sort -t_ -k2,2n | sed -n 2p | awk -F_ '{print $3}')
+  bot=$(T list-panes -F '#{pane_left}_#{pane_top}_#{pane_id}' | awk -F_ '$1>0' | sort -t_ -k2,2n | tail -1  | awk -F_ '{print $3}')
+  bash "$ENGINE" toggle "$mid"; bash "$ENGINE" toggle "$bot"   # minimize the two fresh panes
+  bash "$ENGINE" repin "$win"
+  T select-pane -t "$top"; bash "$ENGINE" peekin "$top"        # peek the stale-saved top pane
+  h=$(pane_h "$mid")
+  if [ "$h" -ge 4 ]; then ok "p8b peeked-stack sibling (mid) keeps MIN_H (h=$h)"; else bad "p8b mid starved to h=$h (< MIN_H 4) with a mostly-empty column"; fi
+  h=$(pane_h "$bot")
+  if [ "$h" -ge 4 ]; then ok "p8b peeked-stack sibling (bot) keeps MIN_H (h=$h)"; else bad "p8b bot starved to h=$h (< MIN_H 4) with a mostly-empty column"; fi
+  assert_live "p8b after peeking a stale-saved stacked pane"
+}
+
 # --- Part 9: after-resize-window repins minimized panes ---------------------
 # The hook firing on resize is tmux's guarantee; we deterministically verify (a) the
 # hook is wired to repin, and (b) repin re-pins a pane that a window resize rescaled.
@@ -740,6 +773,7 @@ main() {
   part_narrow_off_widths
   part_minimize_others
   part_peek
+  part_peek_floor
   part_resize_window
   part_marker
   part_exotic

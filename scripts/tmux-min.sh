@@ -53,7 +53,7 @@ BORDER_POS="${BORDER_POS:-off}"   # apply() overrides this from tmux; default is
 # _transform: call the Rust engine with the SAME six positional inputs the bash transform()
 # took, plus the four globals it read (MIN_H MIN_W ABS_MIN_H BORDER_POS). Prints the new
 # layout string to stdout. Hard-fails (no bash fallback) if the binary can't be found.
-_transform() {  # LAYOUT MINSET SAVEDW WPANE WVAL MINH
+_transform() {  # LAYOUT MINSET SAVEDW WPANE WVAL MINH MINW WSET
   [ -n "$_BIN" ] || { echo "tmux-pane-minimize: tmux-min-transform binary not found (build engine-rs or set TMUX_MIN_TRANSFORM)" >&2; return 1; }
   "$_BIN" "$MIN_H" "$MIN_W" "$ABS_MIN_H" "$BORDER_POS" "$@"
 }
@@ -100,7 +100,7 @@ trap _unlock EXIT
 # suppresses the after-resize-pane hook during our own select-layout; chaining the unset
 # onto select-layout keeps the suppression window as tight as possible.
 apply() {
-  local win="$1" wp="${2:-}" wv="${3:-0}" out new rid
+  local win="$1" wp="${2:-}" wv="${3:-0}" ws="${4:-0}" out new rid
   local n=0 f1 f2 f3 f4 f5 f6 f7 zoomed layout minset=" " savedw=" " minh=" " minw=" " actpane="" actmin=0
   out=$(tmux set-option -g @minimize_guard 1 \; \
         display-message -p -t "$win" '#{window_zoomed_flag}|#{pane-border-status}|#{window_layout}' \; \
@@ -119,7 +119,7 @@ apply() {
 $out
 EOF
   case "$BORDER_POS" in top|bottom) ;; *) BORDER_POS=off ;; esac
-  if ! new=$(_transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh" "$minw"); then
+  if ! new=$(_transform "$layout" "$minset" "$savedw" "$wp" "$wv" "$minh" "$minw" "$ws"); then
     tmux set-option -gu @minimize_guard   # don't leave the resize-hook guard stuck on
     return 1
   fi
@@ -146,30 +146,38 @@ _rezoom() {  # $1 was-zoomed  $2 active-pane-id  $3 active-pane-was-minimized
 }
 
 toggle_pane() {
-  local pane="$1" win num active saved h w
-  IFS='|' read -r win num active saved h w <<<"$(tmux display-message -p -t "$pane" \
-    '#{window_id}|#{pane_id}|#{?@minimize_active,1,0}|#{@minimize_saved}|#{pane_height}|#{pane_width}')"
+  local pane="$1" win num active saved h w sset
+  IFS='|' read -r win num active saved h w sset <<<"$(tmux display-message -p -t "$pane" \
+    '#{window_id}|#{pane_id}|#{?@minimize_active,1,0}|#{@minimize_saved}|#{pane_height}|#{pane_width}|#{?@minimize_saved_set,1,0}')"
   num=${num#%}
   _lock "$win"
   if [ "$active" = 1 ]; then
     case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
     tmux set-option -t "$pane" -p @minimize_active 0 \; \
          set-option -t "$pane" -pu @minimize_peek \; \
+         set-option -t "$pane" -pu @minimize_saved_set \; \
          set-option -t "$pane" -pu @minimize_minh        # custom min height is per-session
     # Roll back to minimized if the layout couldn't be applied, so the pane never ends up
     # marked un-minimized while still collapsed (or vice versa).
-    apply "$win" "$num" "$saved" || tmux set-option -t "$pane" -p @minimize_active 1
+    apply "$win" "$num" "$saved" "$sset" || tmux set-option -t "$pane" -p @minimize_active 1
   else
     # @minimize_saved_w is the NARROW feature's memory (the width a narrowed group widens
     # back to). It must exist ONLY while narrowing is on: with narrow off the engine would
     # otherwise pin a fully-minimized stack to it on every apply, snapping back any width
     # the user drags. When off, also drop a stale value left by an earlier narrow-on session.
+    # @minimize_saved is only a SNAPSHOT of the height this pane happened to have — it can be
+    # far larger than the pane could ever occupy in the stack it ends up in (minimize a pane
+    # while it is alone in its column, then split it). Clear @minimize_saved_set so the engine
+    # treats it as a hint that must not squeeze minimized siblings below MIN_H; only an
+    # explicit user resize (dragend / resize-while-peeked) marks it as deliberate.
     if [ "$NARROW" = on ]; then
       tmux set-option -t "$pane" -p @minimize_saved "$h" \; \
+           set-option -t "$pane" -pu @minimize_saved_set \; \
            set-option -t "$pane" -p @minimize_saved_w "$w" \; \
            set-option -t "$pane" -p @minimize_active 1
     else
       tmux set-option -t "$pane" -p @minimize_saved "$h" \; \
+           set-option -t "$pane" -pu @minimize_saved_set \; \
            set-option -t "$pane" -pu @minimize_saved_w \; \
            set-option -t "$pane" -p @minimize_active 1
     fi
@@ -185,16 +193,18 @@ toggle_pane() {
 # a pane that is peeking and no longer active. This makes a rapid focus ping-pong
 # converge deterministically to the final-focus state instead of a last-writer race.
 peekin() {
-  local pane="$1" win="${2:-}" num active peek pa saved
+  local pane="$1" win="${2:-}" num active peek pa saved sset
   [ -z "$win" ] && win=$(tmux display-message -p -t "$pane" '#{window_id}')
   _lock "$win"
-  IFS='|' read -r active peek pa num saved <<<"$(tmux display-message -p -t "$pane" \
-    '#{?@minimize_active,1,0}|#{?@minimize_peek,1,0}|#{pane_active}|#{pane_id}|#{@minimize_saved}')"
+  IFS='|' read -r active peek pa num saved sset <<<"$(tmux display-message -p -t "$pane" \
+    '#{?@minimize_active,1,0}|#{?@minimize_peek,1,0}|#{pane_active}|#{pane_id}|#{@minimize_saved}|#{?@minimize_saved_set,1,0}')"
   if [ "$active" = 1 ] && [ "$peek" != 1 ] && [ "$pa" = 1 ]; then
     num=${num#%}
     case "$saved" in ''|*[!0-9]*) saved=$MIN_H ;; esac
     tmux set-option -t "$pane" -p @minimize_peek 1
-    apply "$win" "$num" "$saved" || tmux set-option -t "$pane" -pu @minimize_peek   # roll back
+    # sset tells the engine whether $saved is a deliberate user size (honour it, siblings may
+    # yield to their floor) or just a snapshot (a hint that must spare siblings their MIN_H).
+    apply "$win" "$num" "$saved" "$sset" || tmux set-option -t "$pane" -pu @minimize_peek   # roll back
   fi
   _unlock
 }
@@ -228,7 +238,10 @@ dragend() {
   while IFS='|' read -r id a h p act mh _ _ _; do
     [ -z "$id" ] && continue
     if [ "$a" = 1 ] && [ "$p" = 1 ]; then
-      tmux set-option -t "$id" -p @minimize_saved "$h"
+      # The user dragged this pane's border while it was peeked -> a DELIBERATE size. Mark it
+      # so the engine honours it exactly on later peeks (see @minimize_saved_set in STATE.md).
+      tmux set-option -t "$id" -p @minimize_saved "$h" \; \
+           set-option -t "$id" -p @minimize_saved_set 1
     elif [ "$a" = 1 ] && [ "$p" != 1 ] && [ "$act" != 1 ]; then
       case "$mh" in ''|*[!0-9]*) cur=$MIN_H ;; *) cur=$mh ;; esac
       d=$(( h - cur )); [ "$d" -lt 0 ] && d=$(( -d ))
@@ -427,7 +440,10 @@ EOF
       else
         cmd+=( set-option -t "$id" -pu @minimize_saved_w ';' )
       fi
+      # As in toggle_pane: this @minimize_saved is an incidental snapshot, so clear
+      # @minimize_saved_set — the engine must treat it as a hint, not a deliberate size.
       cmd+=( set-option -t "$id" -p @minimize_saved "$ph" ';'
+             set-option -t "$id" -pu @minimize_saved_set ';'
              set-option -t "$id" -p @minimize_active 1 ';'
              set-option -t "$id" -p @minimize_others 1 )
     done <<EOF

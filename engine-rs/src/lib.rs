@@ -398,10 +398,26 @@ impl Node {
                             rtgt = fill;
                         }
                     }
-                    let mut cap = avail - fixf - rcount * ctx.min_h;
-                    if cap < ctx.min_h {
-                        cap = avail - fixf - rcount;
-                    }
+                    // How far the expansion may eat into the MINIMIZED panes depends on where
+                    // wval came from. wset — the user explicitly sized this pane (dragged /
+                    // resized it while peeked) — honour it: minimized panes may yield all the
+                    // way to their abs_min_h floor (fixf). Otherwise wval is just the height
+                    // the pane happened to have when it was minimized; that snapshot can be far
+                    // larger than the pane could ever occupy here (e.g. minimized while alone in
+                    // its column, then split), so treat it as a HINT and never push a minimized
+                    // pane below its comfortable min_h while the group still has the room.
+                    let cap = if ctx.wset {
+                        let c = avail - fixf - rcount * ctx.min_h;
+                        if c < ctx.min_h { avail - fixf - rcount } else { c }
+                    } else {
+                        let c = avail - fixmin - rcount * ctx.min_h;
+                        if c < ctx.min_h {
+                            let c2 = avail - fixf - rcount * ctx.min_h;
+                            if c2 < ctx.min_h { avail - fixf - rcount } else { c2 }
+                        } else {
+                            c
+                        }
+                    };
                     if rtgt > cap {
                         rtgt = cap;
                     }
@@ -567,6 +583,10 @@ pub struct Params<'a> {
     pub minw: &'a str,
     pub wpane: &'a str,
     pub wval: i32,
+    /// Did the USER explicitly set `wval` (dragged/resized the pane while peeked)? If not,
+    /// `wval` is only the height the pane happened to have when minimized — a hint that must
+    /// never squeeze a minimized sibling below `min_h` while the group still has room.
+    pub wset: bool,
     pub min_h: i32,
     pub min_w: i32,
     pub abs_min_h: i32,
@@ -718,9 +738,28 @@ mod tests {
         minh: &str,
         minw: &str,
     ) -> String {
+        run_wset(min_h, min_w, abs_min_h, border_pos, layout, minset, savedw, wpane, wval, minh, minw, false)
+    }
+
+    // Same, with the explicit "user set this height" flag (CLI arg 12).
+    #[allow(clippy::too_many_arguments)]
+    fn run_wset(
+        min_h: i32,
+        min_w: i32,
+        abs_min_h: i32,
+        border_pos: &str,
+        layout: &str,
+        minset: &str,
+        savedw: &str,
+        wpane: &str,
+        wval: i32,
+        minh: &str,
+        minw: &str,
+        wset: bool,
+    ) -> String {
         transform(
             layout,
-            &Params { minset, savedw, minh, minw, wpane, wval, min_h, min_w, abs_min_h, border_pos },
+            &Params { minset, savedw, minh, minw, wpane, wval, wset, min_h, min_w, abs_min_h, border_pos },
         )
     }
 
@@ -789,6 +828,37 @@ mod tests {
             let got = run(a.0, a.1, a.2, a.3, a.4, a.5, a.6, a.7, a.8, a.9, a.10);
             assert_eq!(&got.as_str(), expected, "oracle case {i}: args={a:?}");
         }
+    }
+
+    // A restore/peek height the USER did not set is only a hint: it must never squeeze a
+    // minimized sibling below min_h while the group still has room. An explicitly user-set
+    // height still may (that is what the abs_min_h floor model is for). Regression for the
+    // "minimized while alone in its column, then split" stale-saved bug, where a 3-stack in a
+    // 50-row column collapsed two siblings to 1 row with ~40 rows going spare.
+    #[test]
+    fn unset_restore_height_is_a_hint_that_spares_sibling_min_h() {
+        let layout = "0000,200x50,0,0[200x5,0,0,1,200x4,0,6,3,200x39,0,11,2]";
+        let args = (4, 0, 1, "off", layout, " 2 3 ", " ", "1", 49, " ", " ");
+
+        // not user-set: pane 1 expands only to the natural fill; 2 and 3 keep min_h (4).
+        let hint = run_wset(args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9, args.10, false);
+        assert_eq!(hint, "5d1c,200x50,0,0[200x40,0,0,1,200x4,0,41,3,200x4,0,46,2]", "unset height must spare sibling min_h");
+
+        // user-set: honoured, siblings yield to the abs_min_h floor as before.
+        let explicit = run_wset(args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9, args.10, true);
+        assert_eq!(explicit, "a225,200x50,0,0[200x46,0,0,1,200x1,0,47,3,200x1,0,49,2]", "user-set height must still be honoured");
+    }
+
+    // A genuinely crowded group (min_h cannot fit for everyone) must still fall back to the
+    // abs_min_h floor model even when the height is only a hint — otherwise a peek in a tall
+    // stack would have nowhere to grow.
+    #[test]
+    fn crowded_group_still_uses_the_floor_when_min_h_cannot_fit() {
+        let layout = "0000,100x20,0,0[100x3,0,0,0,100x3,0,4,1,100x3,0,8,2,100x1,0,12,3,100x1,0,14,4,100x3,0,16,5]";
+        let out = run_wset(3, 15, 2, "off", layout, " 0 1 2 3 4 ", " ", "5", 100, " ", " ", false);
+        // pane 5 still gets room; the five minimized panes sit at/near the abs_min_h(2) floor.
+        assert!(out.contains("100x5,0,15,5"), "peeked pane must still expand when crowded: {out}");
+        assert!(!out.contains("100x1,"), "no pane should fall below abs_min_h(2): {out}");
     }
 
     #[test]

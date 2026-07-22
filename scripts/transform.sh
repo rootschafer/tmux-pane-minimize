@@ -322,8 +322,23 @@ _recompute_v() {
   if [ "$rpresent" = 1 ]; then
     rfix=1; rtgt=$WVAL; [ "$rtgt" -lt "$MIN_H" ] && rtgt=$MIN_H
     if [ "$rcount" -eq 0 ]; then fill=$(( avail - fixmin )); [ "$rtgt" -lt "$fill" ] && rtgt=$fill; fi
-    cap=$(( avail - fixf - rcount * MIN_H ))                      # leave minimized at floor + flex at MIN_H
-    [ "$cap" -lt "$MIN_H" ] && cap=$(( avail - fixf - rcount ))   # super tight: flex >=1 each
+    # How far the expansion may eat into the MINIMIZED panes depends on where WVAL came from.
+    # WSET=1 — the user explicitly sized this pane (dragged/resized it while peeked), so honour
+    # it: minimized panes may yield all the way to their ABS_MIN_H floor (fixf).
+    # WSET=0 — WVAL is just the height the pane happened to have when it was minimized. That
+    # snapshot can be far larger than the pane could ever occupy here (e.g. it was minimized
+    # while alone in its column, then split), so it is only a HINT: never let it push a
+    # minimized pane below its comfortable MIN_H (fixmin) while the group still has the room.
+    if [ "${WSET:-0}" = 1 ]; then
+      cap=$(( avail - fixf - rcount * MIN_H ))                    # leave minimized at floor + flex at MIN_H
+      [ "$cap" -lt "$MIN_H" ] && cap=$(( avail - fixf - rcount )) # super tight: flex >=1 each
+    else
+      cap=$(( avail - fixmin - rcount * MIN_H ))                  # leave minimized at MIN_H + flex at MIN_H
+      if [ "$cap" -lt "$MIN_H" ]; then                            # no room for that -> floor model
+        cap=$(( avail - fixf - rcount * MIN_H ))
+        [ "$cap" -lt "$MIN_H" ] && cap=$(( avail - fixf - rcount ))
+      fi
+    fi
     [ "$rtgt" -gt "$cap" ] && rtgt=$cap
     [ "$rtgt" -lt 1 ] && rtgt=1
   fi

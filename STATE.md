@@ -53,6 +53,7 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 |--------|-------|-----------|---------|-----------|
 | `@minimize_active` | pane | toggle / minimize-others / restore-state | `apply` (→ MINSET), marker format, focus/resize hooks | set when a pane is minimized; cleared on un-minimize or when the user resizes the active pane taller. |
 | `@minimize_saved` | pane | toggle (on minimize), resize-while-peeked hook, minimize-others ENTER | toggle (on un-minimize), `peekin` (peek height) | the pane's height *before* minimizing — the size it restores/peeks to. |
+| `@minimize_saved_set` | pane | `dragend` + the resize-while-peeked hook (set); toggle (cleared on both minimize and un-minimize) | `toggle` / `peekin` → the engine's `WSET` input | did the **user deliberately choose** `@minimize_saved`, by resizing the pane while it was peeked? Unset means `@minimize_saved` is just the height the pane happened to have when it was minimized — a snapshot that can be far bigger than the pane could ever occupy in its current stack (minimize a pane while it is alone in its column, then split it). The engine honours a *set* height exactly (minimized siblings may yield to `@minimize-absolute-min-height`), but treats an *unset* one as a hint that must never push a minimized sibling below `@minimize-height` while the group still has room. |
 | `@minimize_saved_w` | pane | toggle (on minimize), minimize-others ENTER, narrow-toggle ON — **all only while `@minimize-narrow` is on** | `apply` (→ SAVEDW, restore a narrowed stack's width) | the pane's width before a fully-minimized stack narrowed — the NARROW feature's memory. Exists **only while narrowing is on** (cleared by narrow-toggle OFF after the widening repin, by minimize/dragend when narrow is off, and skipped by restore-state when narrow is off): with narrow off the engine would otherwise pin a fully-min stack to it on every apply, snapping back user drags. |
 | `@minimize_minh` | pane | `dragend`, `minh-set/grow/shrink` | `apply` (→ MINH map) | per-pane custom minimized height; **cleared on un-minimize** (per-minimize-session). |
 | `@minimize_minw` | pane | `dragend` (side-border drag on a fully-minimized group) | `apply` (→ MINW map) | custom minimized **width** for a fully-minimized vertical group, stored on each member pane and shared by the group. **Persists** (not cleared on un-minimize) so the group keeps its width; also saved/restored by resurrect. |
@@ -68,7 +69,8 @@ live). Everything else is read once at load by `pane-minimize.tmux`.
 `apply()` reads the `@minimize_*` pane options above plus `#{window_layout}` in one
 chained tmux call, folds them into the strings the **pure** transform consumes —
 `MINSET` (minimized pane numbers), `SAVEDW`, `MINH`, `MINW` (custom group widths),
-`WPANE`/`WVAL` (the restore pane and its target height) — and `BORDER_POS`, then shells out to the Rust engine
+`WPANE`/`WVAL` (the restore pane and its target height) and `WSET` (is that height
+user-chosen — see `@minimize_saved_set`) — and `BORDER_POS`, then shells out to the Rust engine
 (`tmux-min-transform`, from `engine-rs/`) via `_transform()`. The transform touches no tmux:
 same inputs → same layout. `scripts/transform.sh` is the byte-for-byte bash oracle the Rust
 engine is validated against, and is what the offline property suite exhaustively checks.

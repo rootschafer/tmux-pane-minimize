@@ -116,8 +116,11 @@ _add_hook after-resize-pane '@minimize_active 0' \
 # If the user resizes a pane *while it is peeked* (expanded for inspection), remember
 # the new height as its saved size so future peeks / un-minimize use it. set-option
 # does NOT expand #{pane_height}, so capture it through run-shell (which does).
+# @minimize_saved_set marks the height as DELIBERATE (vs the incidental snapshot taken when a
+# pane is minimized), so the engine honours it exactly instead of treating it as a hint that
+# must spare the other minimized panes their @minimize-height. See STATE.md.
 _add_hook after-resize-pane '@minimize_saved' \
-  "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{@minimize_active},#{@minimize_peek}}}' 'run-shell -b \"tmux set-option -t #{pane_id} -p @minimize_saved #{pane_height}\"'"
+  "if-shell -F '#{&&:#{!=:#{@minimize_guard},1},#{&&:#{@minimize_active},#{@minimize_peek}}}' 'run-shell -b \"tmux set-option -t #{pane_id} -p @minimize_saved #{pane_height} \\; set-option -t #{pane_id} -p @minimize_saved_set 1\"'"
 
 # Terminal/window resize rescales panes (fires after-resize-window, not
 # after-resize-pane) -> re-pin every minimized pane.

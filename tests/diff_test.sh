@@ -16,26 +16,26 @@ WVALS="0 1 3 9 1000"
 PASSED=0
 FAILED=0
 
-# diff_one BORDER_POS ABS_MIN_H LAYOUT MINSET SAVEDW WPANE WVAL MINH [MINW]
+# diff_one BORDER_POS ABS_MIN_H LAYOUT MINSET SAVEDW WPANE WVAL MINH [MINW] [WSET]
 diff_one() {
-  local bp="$1" abs_min_h="$2" layout="$3" minset="$4" savedw="$5" wpane="$6" wval="$7" minh="$8" minw="${9:- }"
+  local bp="$1" abs_min_h="$2" layout="$3" minset="$4" savedw="$5" wpane="$6" wval="$7" minh="$8" minw="${9:- }" wset="${10:-0}"
 
   # Run bash driver
   local out_bash
-  out_bash=$("$BASH_DRIVER" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh" "$minw")
+  out_bash=$("$BASH_DRIVER" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh" "$minw" "$wset")
 
   # Run rust binary
   local out_rust
-  out_rust=$("$RUST_BIN" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh" "$minw")
-  
+  out_rust=$("$RUST_BIN" "$MIN_H" "$MIN_W" "$abs_min_h" "$bp" "$layout" "$minset" "$savedw" "$wpane" "$wval" "$minh" "$minw" "$wset")
+
   if [ "$out_bash" = "$out_rust" ]; then
     PASSED=$((PASSED + 1))
     if [ "${VERBOSE:-0}" = 1 ]; then
-      echo "OK: bp=$bp abs_min_h=$abs_min_h minset=[$minset] savedw=[$savedw] wpane=[$wpane] wval=$wval minh=[$minh] -> $out_bash"
+      echo "OK: bp=$bp abs_min_h=$abs_min_h minset=[$minset] savedw=[$savedw] wpane=[$wpane] wval=$wval minh=[$minh] wset=$wset -> $out_bash"
     fi
   else
     FAILED=$((FAILED + 1))
-    echo "FAIL: bp=$bp abs_min_h=$abs_min_h minset=[$minset] savedw=[$savedw] wpane=[$wpane] wval=$wval minh=[$minh]"
+    echo "FAIL: bp=$bp abs_min_h=$abs_min_h minset=[$minset] savedw=[$savedw] wpane=[$wpane] wval=$wval minh=[$minh] wset=$wset"
     echo "  bash: $out_bash"
     echo "  rust: $out_rust"
     exit 1
@@ -138,5 +138,33 @@ done
 ML="0000,200x60,0,0{98x60,0,0,0,50x60,99,0[50x30,99,0,1,50x29,99,31,2],50x60,150,0[50x30,150,0,3,50x29,150,31,4]}"
 diff_one off 1 "$ML" " 1 2 3 4 " " " "" 0 " " " 1:30 3:60 "
 diff_one off 1 "$ML" " 1 2 3 4 " " " "" 0 " " " 1:60 3:20 "
+
+# WSET (arg 12): whether the restore/peek height was explicitly set by the user. It changes
+# how far the expansion may eat into the minimized panes (their MIN_H vs their ABS_MIN_H
+# floor), so sweep BOTH branches — including WVALs large enough to hit the cap — over stacks
+# that mix minimized and flexible panes, plus a genuinely crowded stack where MIN_H can't fit.
+echo "Running user-set vs hint restore heights (WSET)..."
+for wset in 0 1; do
+  # 3-stack beside a column: peek/restore one pane while the others stay minimized
+  SL='0000,200x50,0,0[200x5,0,0,1,200x4,0,6,3,200x39,0,11,2]'
+  for wv in 1 4 12 24 40 45 49 100; do
+    for bp in off top bottom; do
+      diff_one "$bp" 1 "$SL" ' 2 3 ' ' ' 1 "$wv" ' ' ' ' "$wset"
+    done
+    diff_one off 2 "$SL" ' 2 3 ' ' ' 1 "$wv" ' ' ' ' "$wset"
+    diff_one off 1 "$SL" ' 2 ' ' ' 1 "$wv" ' ' ' ' "$wset"     # one minimized + one flex sibling
+    diff_one off 1 "$SL" ' ' ' ' 1 "$wv" ' ' ' ' "$wset"       # all siblings flexible
+    diff_one off 1 "$SL" ' 2 3 ' ' ' 1 "$wv" ' 3:9 ' ' ' "$wset"   # custom per-pane minh
+  done
+  # crowded: 6 panes in 20 rows -> MIN_H cannot fit for everyone, floor model must engage
+  CL='0000,100x20,0,0[100x3,0,0,0,100x3,0,4,1,100x3,0,8,2,100x1,0,12,3,100x1,0,14,4,100x3,0,16,5]'
+  for wv in 4 10 100; do
+    for abs in 1 2; do
+      diff_one off "$abs" "$CL" ' 0 1 2 3 4 ' ' ' 5 "$wv" ' ' ' ' "$wset"
+    done
+  done
+  # tiny group where even the restore pane is squeezed
+  diff_one off 1 '0000,80x6,0,0[80x2,0,0,1,80x3,0,3,2]' ' 2 ' ' ' 1 50 ' ' ' ' "$wset"
+done
 
 echo "DIFFERENTIAL TESTS PASSED: $PASSED cases compared successfully."

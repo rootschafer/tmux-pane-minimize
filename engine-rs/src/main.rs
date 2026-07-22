@@ -17,7 +17,7 @@ fn main() {
     }
     if args.len() < 11 {
         eprintln!(
-            "Usage: tmux-min-transform MIN_H MIN_W ABS_MIN_H BORDER_POS LAYOUT MINSET SAVEDW WPANE WVAL MINH [MINW]"
+            "Usage: tmux-min-transform MIN_H MIN_W ABS_MIN_H BORDER_POS LAYOUT MINSET SAVEDW WPANE WVAL MINH [MINW] [WSET]"
         );
         std::process::exit(1);
     }
@@ -30,6 +30,8 @@ fn main() {
     let wval: i32 = args[9].parse().unwrap_or(0);
     // MINW is optional for back-compat; default to the empty map " ".
     let minw: &str = args.get(11).map(|s| s.as_str()).unwrap_or(" ");
+    // WSET (optional 12th arg): 1 = the user explicitly set WVAL for this pane.
+    let wset: bool = args.get(12).map(|s| s.as_str()) == Some("1");
 
     let params = Params {
         minset: &args[6],
@@ -38,6 +40,7 @@ fn main() {
         minw,
         wpane: &args[8],
         wval,
+        wset,
         min_h,
         min_w,
         abs_min_h,

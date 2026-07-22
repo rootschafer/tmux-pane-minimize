@@ -16,5 +16,6 @@ WPANE="$8"
 WVAL="$9"
 MINH="${10}"
 MINW="${11:- }"
+WSET="${12:-0}"   # 1 = the user explicitly set WVAL (read as a global by transform.sh)
 
 transform "$LAYOUT" "$MINSET" "$SAVEDW" "$WPANE" "$WVAL" "$MINH" "$MINW"
