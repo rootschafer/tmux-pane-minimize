@@ -523,6 +523,30 @@ part_minimize_others() {
   else bad "p5 lost zoom on minimize-others exit"; fi
 }
 
+# --- Part 5b: dragend must not mistake a group's remainder for a dragged height ------
+# When EVERY pane in a vertical group is minimized the group must still fill its column, so
+# the engine hands one pane (the bottom-most) whatever space is left over. That height is
+# engine-assigned, not user-chosen — dragend used to see it differ from @minimize-height and
+# record it as that pane's custom minimized height, which then stuck for the rest of the
+# minimize session (and got persisted by resurrect).
+part_dragend_absorber() {
+  local win left ids bot mh p
+  fresh_server -x 200 -y 50
+  T set-option -g @minimize-height 4
+  win=$(T display-message -p '#{window_id}')
+  T split-window -h -t 0; T split-window -v -t 1; T split-window -v -t 1
+  ids=$(T list-panes -F '#{pane_left}_#{pane_id}' | awk -F_ '$1>0{print $2}')
+  printf '%s\n' "$ids" | while read -r p; do [ -n "$p" ] && bash "$ENGINE" toggle "$p"; done
+  left=$(T list-panes -F '#{pane_left}_#{pane_id}' | awk -F_ '$1==0{print $2}')
+  T select-pane -t "$left"                       # the minimized group has no active pane
+  bash "$ENGINE" repin "$win"
+  bot=$(T list-panes -F '#{pane_left}_#{pane_top}_#{pane_id}' | awk -F_ '$1>0' | sort -t_ -k2,2n | tail -1 | awk -F_ '{print $3}')
+  bash "$ENGINE" dragend "$win"                  # a border drag anywhere rescans every pane
+  mh=$(T show-options -t "$bot" -pqv @minimize_minh 2>/dev/null || true)
+  if [ -z "$mh" ]; then ok "p5b remainder-holding pane keeps no custom minimized height"; else bad "p5b dragend invented @minimize_minh=$mh for the group's remainder pane"; fi
+  assert_live "p5b after dragend on a fully-minimized group"
+}
+
 # --- Part 6: tmux-resurrect persistence (save-state/restore-state) -----------
 part_resurrect() {
   local top bot state a minh p
@@ -556,6 +580,70 @@ part_resurrect() {
 
   # restore-state on a missing/empty file must be a harmless no-op.
   bash "$ENGINE" restore-state "/tmp/does-not-exist-$SOCK" && ok "p6 restore of missing file is a no-op"
+  rm -f "$state"
+
+  # @minimize_saved_set (was this peek/restore height DELIBERATELY chosen by the user?) must
+  # survive a save/restore too — otherwise a height you sized by hand silently degrades to a
+  # hint after a restart and the pane stops restoring to it.
+  fresh_server -s rs -x 80 -y 40
+  T split-window -v -t 0; T split-window -v -t 0
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bot=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | tail -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"
+  T select-pane -t "$top"; bash "$ENGINE" peekin "$top"
+  T set-option -g @minimize_guard 1
+  T resize-pane -t "$top" -y 17 >/dev/null 2>&1        # deliberately size the peeked pane
+  T set-option -gu @minimize_guard
+  bash "$ENGINE" dragend "$(T display-message -p '#{window_id}')"
+  T select-pane -t "$bot"; bash "$ENGINE" peekout "$top"
+  if [ "$(T show-options -t "$top" -pqv @minimize_saved_set 2>/dev/null || true)" = 1 ]; then
+    ok "p6 deliberate peek height marks @minimize_saved_set"
+  else bad "p6 dragend did not mark @minimize_saved_set"; fi
+  bash "$ENGINE" save-state "$state"
+  for p in $(T list-panes -F '#{pane_id}'); do
+    T set-option -t "$p" -pu @minimize_active; T set-option -t "$p" -pu @minimize_saved
+    T set-option -t "$p" -pu @minimize_saved_set
+  done
+  bash "$ENGINE" restore-state "$state"
+  if [ "$(T show-options -t "$top" -pqv @minimize_saved_set 2>/dev/null || true)" = 1 ]; then
+    ok "p6 @minimize_saved_set survives save/restore"
+  else bad "p6 @minimize_saved_set lost across save/restore"; fi
+  rm -f "$state"
+
+  # A sidecar written by an older version has no saved_set field. It must still restore
+  # (losing only the flag) instead of being skipped — that would drop the minimized state.
+  fresh_server -s rs -x 80 -y 40
+  T split-window -v -t 0
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  printf '%s\n' "0|0|19|80|7||rs" > "$state"       # pre-flag format: ...|minw|session
+  bash "$ENGINE" restore-state "$state"
+  if [ "$(T display-message -p -t "$top" '#{?@minimize_active,1,0}')" = 1 ]; then
+    ok "p6 legacy (pre-saved_set) sidecar still restores"
+  else bad "p6 legacy sidecar line was dropped"; fi
+  if [ "$(T show-options -t "$top" -pqv @minimize_minh 2>/dev/null || true)" = 7 ]; then
+    ok "p6 legacy sidecar fields land in the right columns"
+  else bad "p6 legacy sidecar misparsed (minh=$(T show-options -t "$top" -pqv @minimize_minh 2>/dev/null || true), expected 7)"; fi
+  rm -f "$state"
+
+  # A session name may contain '|' — the sidecar's field separator. Both the saved line
+  # (session last) and the live pane lookup must keep such a name intact, or the session's
+  # minimized panes are silently skipped on restore.
+  fresh_server -s 'a|b' -x 80 -y 40
+  T split-window -v -t 0
+  top=$(T list-panes -F '#{pane_top} #{pane_id}' | sort -n | head -1 | awk '{print $2}')
+  bash "$ENGINE" toggle "$top"
+  bash "$ENGINE" minh-set "$top" 6
+  bash "$ENGINE" save-state "$state"
+  for p in $(T list-panes -F '#{pane_id}'); do
+    T set-option -t "$p" -pu @minimize_active; T set-option -t "$p" -pu @minimize_minh
+  done
+  bash "$ENGINE" restore-state "$state"
+  if [ "$(T display-message -p -t "$top" '#{?@minimize_active,1,0}')" = 1 ]; then
+    ok "p6 session name containing '|' round-trips"
+  else bad "p6 session name with '|' lost its minimized state on restore"; fi
+  if [ "$(T show-options -t "$top" -pqv @minimize_minh 2>/dev/null || true)" = 6 ]; then
+    ok "p6 piped-session sidecar fields land in the right columns"
+  else bad "p6 piped-session sidecar misparsed"; fi
   rm -f "$state"
 }
 
@@ -772,6 +860,7 @@ main() {
   part_narrow_toggle
   part_narrow_off_widths
   part_minimize_others
+  part_dragend_absorber
   part_peek
   part_peek_floor
   part_resize_window

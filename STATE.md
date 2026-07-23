@@ -80,10 +80,11 @@ engine is validated against, and is what the offline property suite exhaustively
 ## Out-of-band state
 
 - **Resurrect sidecar** — `${@resurrect-dir:-~/.tmux/resurrect}/tmux-pane-minimize.state`.
-  One `|`-separated line per minimized pane (`win|pane|saved|saved_w|minh|minw|session`;
-  session last so a `|` in a session name still parses; not TAB — tmux ≤ 3.4 mangles
-  control chars in format output), keyed by resurrect's stable
-  `session:window.pane_index` identity. Written by `save-state`, replayed
+  One `|`-separated line per minimized pane
+  (`win|pane|saved|saved_w|minh|minw|saved_set|session`; session last so a `|` in a session
+  name still parses; not TAB — tmux ≤ 3.4 mangles control chars in format output), keyed by
+  resurrect's stable `session:window.pane_index` identity. `restore-state` also accepts the
+  older 7-field form (no `saved_set`), unshifting it so an upgrade never drops saved state. Written by `save-state`, replayed
   by `restore-state`, both wired to resurrect's `post-save-all`/`post-restore-all` hooks when
   `@minimize-resurrect on`. Peek and minimize-others grouping are intentionally **not** persisted.
 - **Downloaded engine** — `${XDG_DATA_HOME:-~/.local/share}/tmux-pane-minimize/`:

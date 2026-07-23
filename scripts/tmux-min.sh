@@ -231,11 +231,21 @@ peekout() {
 #    changes width; a vertical drag changes height — we detect which from what actually moved.
 # Tolerance of >1 so the border-status edge nibble and untouched panes don't trigger a change.
 dragend() {
-  local win="$1" id a h p act mh cur d need=0 table cols width cmw swany cids
+  local win="$1" id a h p act mh cur d need=0 table cols width cmw swany cids hold
   _lock "$win"
-  table=$(tmux list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{pane_height}|#{?@minimize_peek,1,0}|#{pane_active}|#{@minimize_minh}|#{pane_width}|#{pane_left}|#{@minimize_minw}|#{@minimize_saved_w}')
+  table=$(tmux list-panes -t "$win" -F '#{pane_id}|#{?@minimize_active,1,0}|#{pane_height}|#{?@minimize_peek,1,0}|#{pane_active}|#{@minimize_minh}|#{pane_width}|#{pane_left}|#{@minimize_minw}|#{@minimize_saved_w}|#{pane_top}')
+  # A column whose panes are ALL minimized still has to fill its height, so the engine hands
+  # the BOTTOM-most pane whatever is left over (see the allmin path in the engine). That
+  # height is engine-assigned, not dragged, and it is nowhere near MIN_H — without this the
+  # height check below would mistake it for a deliberate drag and pin it as that pane's
+  # custom minimized height for the rest of the minimize session. Collect those panes.
+  hold=" $(printf '%s\n' "$table" | awk -F'|' '
+    $1=="" { next }
+    { L=$8; cnt[L]++; if ($2!=1) notmin[L]=1; if ($5==1) act[L]=1
+      if (!(L in bt) || $11+0 > bt[L]) { bt[L]=$11+0; bid[L]=$1 } }
+    END { for (L in cnt) if (cnt[L]>=2 && notmin[L]!=1 && act[L]!=1) print bid[L] }' | tr '\n' ' ') "
   # per-pane: peek-save + custom minimized HEIGHT (width fields are handled by the awk pass below)
-  while IFS='|' read -r id a h p act mh _ _ _; do
+  while IFS='|' read -r id a h p act mh _; do
     [ -z "$id" ] && continue
     if [ "$a" = 1 ] && [ "$p" = 1 ]; then
       # The user dragged this pane's border while it was peeked -> a DELIBERATE size. Mark it
@@ -243,6 +253,7 @@ dragend() {
       tmux set-option -t "$id" -p @minimize_saved "$h" \; \
            set-option -t "$id" -p @minimize_saved_set 1
     elif [ "$a" = 1 ] && [ "$p" != 1 ] && [ "$act" != 1 ]; then
+      case "$hold" in *" $id "*) continue ;; esac   # engine-assigned remainder, not a drag
       case "$mh" in ''|*[!0-9]*) cur=$MIN_H ;; *) cur=$mh ;; esac
       d=$(( h - cur )); [ "$d" -lt 0 ] && d=$(( -d ))
       if [ "$d" -gt 1 ]; then tmux set-option -t "$id" -p @minimize_minh "$h"; need=1; fi
@@ -489,11 +500,12 @@ save_state() {
   local f="${1:-}"
   [ -z "$f" ] && f=$(_state_file)
   mkdir -p "$(dirname "$f")" 2>/dev/null || true
-  # One '|'-separated line per minimized pane: win pane saved saved_w minh minw sess.
+  # One '|'-separated line per minimized pane:
+  #   win pane saved saved_w minh minw saved_set sess
   # NOT tab-separated: tmux <= 3.4 sanitizes control chars (incl. TAB) in format output
   # to '_', which silently corrupted the sidecar. The session name goes LAST so a name
   # containing '|' still parses (read assigns the remainder to the final field).
-  tmux list-panes -a -F '#{?@minimize_active,#{window_index}|#{pane_index}|#{@minimize_saved}|#{@minimize_saved_w}|#{@minimize_minh}|#{@minimize_minw}|#{session_name},}' \
+  tmux list-panes -a -F '#{?@minimize_active,#{window_index}|#{pane_index}|#{@minimize_saved}|#{@minimize_saved_w}|#{@minimize_minh}|#{@minimize_minw}|#{?@minimize_saved_set,1,0}|#{session_name},}' \
     | grep -v '^$' > "$f" 2>/dev/null || true
 }
 restore_state() {
@@ -501,17 +513,29 @@ restore_state() {
   local -a cmd
   [ -z "$f" ] && f=$(_state_file)
   [ -f "$f" ] || return 0
-  # Read every live pane ONCE into a "target|window_id" table, so each saved entry is
+  # Read every live pane ONCE into a "window_id|target" table, so each saved entry is
   # resolved (does the pane still exist? which window?) by an in-shell lookup instead of
   # two display-message round-trips per entry. Then set all the per-pane options in ONE
   # chained tmux call (same coalescing as minimize_others()).
-  panemap=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}|#{window_id}' 2>/dev/null || true)
+  # window_id comes FIRST so the target (which embeds the session NAME) is the read's last
+  # field and keeps any '|' a session name contains — the other order silently failed to
+  # match those sessions, dropping their minimized state.
+  panemap=$(tmux list-panes -a -F '#{window_id}|#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
   cmd=()
-  while IFS='|' read -r win pane saved savedw minh minw sess; do
+  while IFS='|' read -r win pane saved savedw minh minw sset sess; do
+    # Back-compat: a sidecar written before @minimize_saved_set existed has no flag field, so
+    # what lands in `sset` is really the session name. Two shapes to unshift: an empty `sess`
+    # (the common case), or a `sset` that isn't the 0/1 flag (session name containing '|',
+    # which `read` split across the last two fields).
+    if [ -z "$sess" ]; then
+      sess=$sset; sset=0
+    else
+      case "$sset" in 0|1) ;; *) sess="$sset|$sess"; sset=0 ;; esac
+    fi
     [ -z "$sess" ] && continue
     tgt="${sess}:${win}.${pane}"
     wid=""
-    while IFS='|' read -r k v; do [ "$k" = "$tgt" ] && { wid="$v"; break; }; done <<EOF
+    while IFS='|' read -r v k; do [ "$k" = "$tgt" ] && { wid="$v"; break; }; done <<EOF
 $panemap
 EOF
     [ -z "$wid" ] && continue          # a pane from the saved state no longer exists
@@ -524,6 +548,8 @@ EOF
       case "$savedw" in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved_w "$savedw" ) ;; esac
     fi
     case "$minh"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minh    "$minh"   ) ;; esac
+    # Only a deliberate height carries the flag; without it @minimize_saved stays a hint.
+    case "$sset"   in 1) cmd+=( ';' set-option -t "$tgt" -p @minimize_saved_set 1 ) ;; esac
     case "$minw"   in ''|*[!0-9]*) ;; *) cmd+=( ';' set-option -t "$tgt" -p @minimize_minw    "$minw"   ) ;; esac
     case " $wins " in *" $wid "*) ;; *) wins="$wins $wid" ;; esac
   done < "$f"
