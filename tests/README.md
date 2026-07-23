@@ -35,5 +35,10 @@ VERBOSE=1 tests/run.sh # print every passing assertion too
   global `@minimize_guard` check-then-set (measured 47 overlapping applies). Now
   serialized by a per-window `mkdir` lock; handlers re-check live state under the lock.
 
-The race-exposer (Part 3) instruments `apply()` and fails if applies aren't
-serialized (a lock-neutered engine measures ~50 concurrent; fixed measures ≤3).
+The race-exposer (Part 3) instruments `apply()` and fails if applies aren't serialized.
+It fires a burst of 16 concurrent `repin`s and counts real overlaps (a shared `mkdir`
+marker). The lock is *best-effort* by design — a ~20s valve lets a waiter proceed unlocked
+rather than hang a keystroke — so a CPU-starved machine legitimately shows a few overlaps.
+Measured under `--cpus=0.5`: **lock working 0–6, lock neutered 11–15**, so the bound is half
+the burst, which separates the two populations and still catches the pre-`mkdir`
+global-guard race (which overlaps essentially every apply).

@@ -209,6 +209,7 @@ s2 s3 s1 m2 s2 s1 r'
 # enter/exit ordering reflects real interleaving (modulo a 1-deep handoff artifact).
 part3() {
   local eng2 busy coll win r
+  local burst=16
   eng2="$WORKDIR/scripts/engine2.sh"   # in scripts/ so it still sources transform.sh
   busy="/tmp/tmin-busy-$SOCK"          # the mutual-exclusion marker dir
   coll="/tmp/tmin-coll-$SOCK"          # collision log
@@ -234,19 +235,29 @@ part3() {
 
   # Realistic concurrent burst (focus/resize hooks are only a few deep in practice).
   r=0
-  while [ "$r" -lt 16 ]; do bash "$eng2" repin "$win" & r=$((r + 1)); done
+  while [ "$r" -lt "$burst" ]; do bash "$eng2" repin "$win" & r=$((r + 1)); done
   wait
   T run-shell "true" >/dev/null 2>&1
   assert_live "p3 post-burst (race exposer: valid layout, no zero pane)"
 
-  # The mkdir lock is best-effort serialization (a killed holder is reclaimed; under
-  # pathological contention a sub-millisecond reclaim window can still slip one through).
-  # reconcile guarantees every layout is valid regardless, so the goal here is to catch a
-  # REGRESSION to the old global-guard race (which overlapped dozens), not to prove a
-  # perfect mutex. Tolerate up to 2; a broken lock produces far more.
-  local n; n=$(grep -c OVERLAP "$coll" 2>/dev/null || true); : "${n:=0}"
-  if [ "$n" -le 2 ]; then ok "p3 applies serialized ($n overlaps over 16 concurrent, <=2 ok)"
-  else bad "p3 NOT serialized: $n overlapping applies (guard race regression?)"; fi
+  # The mkdir lock is best-effort serialization, and deliberately so: a dead holder is
+  # reclaimed, and a ~20s safety valve lets a waiter proceed UNLOCKED rather than hang a
+  # keystroke behind a wedged holder. On a CPU-starved machine (a busy CI runner) that valve
+  # and the reclaim window do let a few applies overlap — that is the design working, not a
+  # bug, and reconcile keeps every layout valid regardless. So this asserts the lock still
+  # SERIALIZES, not that it is a perfect mutex.
+  #
+  # Measured on one CPU-starved container (`--cpus=0.5`), same burst, same machine:
+  #   lock working  : 0-6 overlaps
+  #   lock neutered : 11-15 overlaps  (i.e. essentially every apply in the burst)
+  # Half the burst cleanly separates the two populations. The old `<=2` bound sat inside the
+  # working range and flaked on CI; a real regression (the pre-mkdir global-guard race)
+  # overlaps ~every apply and is still caught with room to spare.
+  local n
+  local tol=$(( burst / 2 ))
+  n=$(grep -c OVERLAP "$coll" 2>/dev/null || true); : "${n:=0}"
+  if [ "$n" -le "$tol" ]; then ok "p3 applies serialized ($n overlaps over $burst concurrent, <=$tol ok)"
+  else bad "p3 NOT serialized: $n overlapping applies over $burst concurrent (>$tol — guard race regression?)"; fi
 
   rmdir "$busy" 2>/dev/null; rm -f "$eng2" "$coll"
 }
